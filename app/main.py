@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request, Response
-from prometheus_client import make_asgi_app
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api.v1 import health, sites
 from app.config import get_settings
@@ -87,7 +87,12 @@ def create_app() -> FastAPI:
             )
         return response
 
-    application.mount("/metrics", make_asgi_app())
+    @application.get("/metrics")
+    async def metrics_endpoint() -> Response:
+        """Экспорт метрик Prometheus без редиректа (не Mount → без 307)."""
+        logger.debug("metrics_scraped")
+        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
     return application
 
 
