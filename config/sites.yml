@@ -1,0 +1,8 @@
+# Конфигурация мониторируемых сайтов.
+#   domain             — домен сайта (обязателен, без https://)
+#   metrika_counter_id — ID счётчика Яндекс.Метрики (ЭПИК-2)
+#   webmaster_host_id  — host_id Яндекс.Вебмастера (ЭПИК-5)
+#   node_exporter_url  — URL node_exporter сервера сайта (ЭПИК-6)
+sites:
+  - domain: example.com
+  - domain: example.org

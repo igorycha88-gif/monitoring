@@ -1,0 +1,64 @@
+name: monitoring
+
+services:
+  app:
+    build: .
+    container_name: monitoring-app
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8088:8088"
+    volumes:
+      - ./config:/srv/config:ro
+    networks:
+      - monitoring-net
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: monitoring-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=90d
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9091:9090"
+    networks:
+      - monitoring-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: monitoring-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-monitoring}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3300:3000"
+    networks:
+      - monitoring-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  monitoring-net:
+    name: monitoring-net
+
+volumes:
+  prometheus-data:
+  grafana-data:
