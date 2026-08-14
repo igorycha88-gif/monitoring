@@ -60,8 +60,10 @@ monitoring/
 ├── config/
 │   └── sites.yml            # сайты: domain + опц. counter_id / host_id / exporter
 ├── grafana/
-│   ├── dashboards/          # JSON-дашборды (ЭПИК-3)
-│   └── provisioning/        # datasources + dashboards
+│   ├── dashboards/          # JSON-дашборды [ЭПИК-3]:
+│   │   ├── site-overview.json  # «Обзор сайта» (переменная site, 8 панелей)
+│   │   └── all-sites.json      # «Все сайты» (таблица статусов + спарклайны)
+│   └── provisioning/        # datasources (uid: prometheus) + dashboards
 ├── prometheus/prometheus.yml
 ├── tests/
 ├── docker-compose.yml       # app 8088 + prometheus 9091 + grafana 3300
@@ -92,6 +94,14 @@ monitoring/
 - `parallel = True` — параллельный обход сайтов (uptime/ssl); API-коллекторы
   (Метрика/Вебмастер) — последовательные (`parallel=False`, лимиты API)
 - Токены только из Settings (.env); никогда в коде/коммитах
+
+### Дашборды Grafana (ЭПИК-3)
+- Datasource только по uid `prometheus` (provisioning), без `${DS_...}` переменных
+- Переменная `site` — query `label_values(monitoring_uptime_status, site)`
+- `monitoring_site_visits_total` / `monitoring_site_visitors` — gauge:
+  в панелях напрямую, БЕЗ `rate()`/`increase()`
+- Валидация JSON-дашбордов — `tests/test_dashboards.py`
+  (белый список метрик синхронизирован с `app/metrics.py`)
 
 ### Логирование
 - structlog, JSON; события: `http_request`, `collector_cycle_start/end`,
