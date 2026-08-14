@@ -25,6 +25,18 @@ RETRYABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
 )
 
 
+class RateLimitError(Exception):
+    """HTTP 429 от внешнего API (ADR-003).
+
+    retry_after_seconds — пауза из заголовка Retry-After (delta-seconds);
+    None — заголовка нет, используется обычный экспоненциальный backoff.
+    """
+
+    def __init__(self, message: str, retry_after_seconds: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
 class BaseCollector(ABC):
     """Базовый коллектор.
 
@@ -60,13 +72,19 @@ class BaseCollector(ABC):
                 attempt += 1
                 if attempt >= self.max_retries:
                     raise
-                delay = self.retry_base_delay * 2 ** (attempt - 1)
+                retry_after = exc.retry_after_seconds if isinstance(exc, RateLimitError) else None
+                delay = (
+                    retry_after
+                    if retry_after is not None
+                    else self.retry_base_delay * 2 ** (attempt - 1)
+                )
                 self.logger.warning(
                     "collector_retry",
                     source=self.source,
                     attempt=attempt,
                     max_retries=self.max_retries,
                     delay_seconds=delay,
+                    retry_after_seconds=retry_after,
                     error=str(exc),
                 )
                 await asyncio.sleep(delay)

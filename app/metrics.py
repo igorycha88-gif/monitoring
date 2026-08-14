@@ -43,3 +43,15 @@ SSL_DAYS_LEFT = Gauge(
     "Дней до истечения TLS-сертификата сайта; отрицательное значение — просрочен",
     ["site"],
 )
+
+SITE_VISITS_TOTAL = Gauge(
+    "monitoring_site_visits_total",
+    "Визиты сайта за текущий день (нарастающий итог, UTC); gauge — применять напрямую, без rate()",
+    ["site", "source"],
+)
+
+SITE_VISITORS = Gauge(
+    "monitoring_site_visitors",
+    "Уникальные посетители сайта за текущий день (нарастающий итог, UTC)",
+    ["site", "source"],
+)

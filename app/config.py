@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     ssl_interval_seconds: int = 3600
     ssl_timeout_seconds: float = 10.0
 
+    metrika_interval_seconds: int = 300
+    metrika_timeout_seconds: float = 10.0
+
     yandex_metrika_oauth_token: str = ""
     yandex_webmaster_oauth_token: str = ""
 

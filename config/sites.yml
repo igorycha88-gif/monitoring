@@ -4,5 +4,8 @@
 #   webmaster_host_id  — host_id Яндекс.Вебмастера (ЭПИК-5)
 #   node_exporter_url  — URL node_exporter сервера сайта (ЭПИК-6)
 sites:
+  # Пример с Метрикой (ЭПИК-2):
+  # - domain: example.com
+  #   metrika_counter_id: 12345678
   - domain: example.com
   - domain: example.org

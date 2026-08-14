@@ -10,7 +10,7 @@ from prometheus_client import generate_latest
 from structlog.testing import capture_logs
 
 from app.sites import SiteConfig
-from collectors.base import BaseCollector
+from collectors.base import BaseCollector, RateLimitError
 
 SITES = [SiteConfig(domain="ok1.com"), SiteConfig(domain="ok2.com")]
 
@@ -110,6 +110,69 @@ async def test_retry_exhausted_raises() -> None:
 
     with pytest.raises(httpx.ReadTimeout):
         await collector.retry(always_fails)
+
+
+async def test_retry_respects_retry_after_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """429 с Retry-After: пауза из заголовка вместо экспоненциального backoff."""
+    delays: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    collector = DummyCollector([])
+    collector.max_retries = 3
+    collector.retry_base_delay = 1.0
+    attempts = {"count": 0}
+
+    async def rate_limited() -> str:
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise RateLimitError("429", retry_after_seconds=7.5)
+        return "ok"
+
+    with capture_logs() as captured:
+        assert await collector.retry(rate_limited, retry_on=(RateLimitError,)) == "ok"
+
+    assert delays == [7.5, 7.5]
+    warnings = [entry for entry in captured if entry["event"] == "collector_retry"]
+    assert len(warnings) == 2
+    assert all(entry["retry_after_seconds"] == 7.5 for entry in warnings)
+    assert all(entry["delay_seconds"] == 7.5 for entry in warnings)
+
+
+async def test_retry_without_retry_after_uses_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """429 без Retry-After: обычный экспоненциальный backoff."""
+    delays: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    collector = DummyCollector([])
+    collector.max_retries = 3
+    collector.retry_base_delay = 0.5
+    attempts = {"count": 0}
+
+    async def rate_limited() -> str:
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise RateLimitError("429", retry_after_seconds=None)
+        return "ok"
+
+    assert await collector.retry(rate_limited, retry_on=(RateLimitError,)) == "ok"
+    assert delays == [0.5, 1.0]
+
+
+def test_rate_limit_error_defaults() -> None:
+    exc = RateLimitError("lim", retry_after_seconds=2.0)
+    assert str(exc) == "lim"
+    assert exc.retry_after_seconds == 2.0
+    assert RateLimitError("lim").retry_after_seconds is None
 
 
 def test_register_adds_interval_job() -> None:
