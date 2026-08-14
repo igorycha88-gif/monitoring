@@ -36,6 +36,7 @@ class BaseCollector(ABC):
     source: str = "base"
     max_retries: int = 3
     retry_base_delay: float = 1.0
+    parallel: bool = False
 
     def __init__(self, sites: Sequence[SiteConfig]) -> None:
         self.sites = list(sites)
@@ -70,45 +71,53 @@ class BaseCollector(ABC):
                 )
                 await asyncio.sleep(delay)
 
+    async def _collect_site_safe(self, site: SiteConfig) -> tuple[bool, int]:
+        """Сбор одного сайта: метрики + логи, ошибка не рвёт цикл.
+
+        Возвращает (успех, число точек).
+        """
+        started = time.perf_counter()
+        try:
+            points = await self.collect_site(site)
+        except Exception as exc:
+            duration = time.perf_counter() - started
+            COLLECTOR_ERRORS_TOTAL.labels(source=self.source, site=site.domain).inc()
+            COLLECTOR_SUCCESS.labels(source=self.source, site=site.domain).set(0)
+            COLLECTOR_DURATION_SECONDS.labels(source=self.source, site=site.domain).set(duration)
+            self.logger.error(
+                "collector_site_error",
+                source=self.source,
+                site=site.domain,
+                error=str(exc),
+                error_type=type(exc).__name__,
+                operation="collect_site",
+            )
+            return False, 0
+        duration = time.perf_counter() - started
+        COLLECTOR_SUCCESS.labels(source=self.source, site=site.domain).set(1)
+        COLLECTOR_DURATION_SECONDS.labels(source=self.source, site=site.domain).set(duration)
+        self.logger.info(
+            "collector_site_success",
+            source=self.source,
+            site=site.domain,
+            points=points,
+            duration_ms=round(duration * 1000, 2),
+        )
+        return True, points
+
     async def run_once(self) -> dict[str, int]:
-        """Один цикл сбора по всем сайтам: метрики + логи, ошибки не рвут цикл."""
+        """Один цикл сбора по всем сайтам: метрики + логи, ошибки не рвут цикл.
+
+        parallel=False — последовательно (API-коллекторы, лимиты внешних API);
+        parallel=True — asyncio.gather (uptime/ssl, ADR-002).
+        """
         self.logger.info("collector_cycle_start", source=self.source, sites_total=len(self.sites))
-        sites_ok = 0
-        points_total = 0
-        for site in self.sites:
-            started = time.perf_counter()
-            try:
-                points = await self.collect_site(site)
-            except Exception as exc:
-                duration = time.perf_counter() - started
-                COLLECTOR_ERRORS_TOTAL.labels(source=self.source, site=site.domain).inc()
-                COLLECTOR_SUCCESS.labels(source=self.source, site=site.domain).set(0)
-                COLLECTOR_DURATION_SECONDS.labels(source=self.source, site=site.domain).set(
-                    duration
-                )
-                self.logger.error(
-                    "collector_site_error",
-                    source=self.source,
-                    site=site.domain,
-                    error=str(exc),
-                    error_type=type(exc).__name__,
-                    operation="collect_site",
-                )
-            else:
-                duration = time.perf_counter() - started
-                COLLECTOR_SUCCESS.labels(source=self.source, site=site.domain).set(1)
-                COLLECTOR_DURATION_SECONDS.labels(source=self.source, site=site.domain).set(
-                    duration
-                )
-                sites_ok += 1
-                points_total += points
-                self.logger.info(
-                    "collector_site_success",
-                    source=self.source,
-                    site=site.domain,
-                    points=points,
-                    duration_ms=round(duration * 1000, 2),
-                )
+        if self.parallel:
+            results = await asyncio.gather(*(self._collect_site_safe(site) for site in self.sites))
+        else:
+            results = [await self._collect_site_safe(site) for site in self.sites]
+        sites_ok = sum(1 for ok, _ in results if ok)
+        points_total = sum(points for _, points in results)
         self.logger.info(
             "collector_cycle_end",
             source=self.source,

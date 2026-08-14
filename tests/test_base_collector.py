@@ -1,4 +1,7 @@
-"""Тесты BaseCollector: метрики, логи цикла, ретраи, расписание."""
+"""Тесты BaseCollector: метрики, логи цикла, ретраи, расписание, parallel."""
+
+import asyncio
+import time
 
 import httpx
 import pytest
@@ -117,3 +120,67 @@ def test_register_adds_interval_job() -> None:
     assert job is not None
     assert job.trigger is not None
     assert job.trigger.interval.total_seconds() == 60
+
+
+class ParallelDummyCollector(DummyCollector):
+    """То же, что DummyCollector, но с параллельным обходом."""
+
+    parallel = True
+
+
+async def test_parallel_site_error_does_not_break_cycle() -> None:
+    sites = [SiteConfig(domain="perr.com"), SiteConfig(domain="pfine.com")]
+    collector = ParallelDummyCollector(sites, fail_domains={"perr.com"})
+    with capture_logs() as captured:
+        result = await collector.run_once()
+    assert result == {"sites_ok": 1, "sites_total": 2, "points_total": 3}
+    metrics = generate_latest().decode()
+    assert 'monitoring_collector_success{site="perr.com",source="dummy"} 0.0' in metrics
+    assert 'monitoring_collector_success{site="pfine.com",source="dummy"} 1.0' in metrics
+    assert len([entry for entry in captured if entry["event"] == "collector_site_error"]) == 1
+
+
+class SleepyCollector(BaseCollector):
+    """Коллектор с задержкой — для проверки реальной конкурентности."""
+
+    source = "sleepy"
+    parallel = True
+
+    def __init__(self, sites: list[SiteConfig], delay: float) -> None:
+        super().__init__(sites)
+        self.delay = delay
+
+    async def collect_site(self, site: SiteConfig) -> int:
+        await asyncio.sleep(self.delay)
+        return 1
+
+
+async def test_parallel_runs_sites_concurrently() -> None:
+    sites = [SiteConfig(domain=f"s{i}.com") for i in range(4)]
+    collector = SleepyCollector(sites, delay=0.2)
+
+    started = time.perf_counter()
+    result = await collector.run_once()
+    elapsed = time.perf_counter() - started
+
+    assert result == {"sites_ok": 4, "sites_total": 4, "points_total": 4}
+    # Последовательно было бы >= 0.8 сек; параллельно — около 0.2 сек.
+    assert elapsed < 0.6
+
+
+class SleepySequentialCollector(SleepyCollector):
+    """Тот же сон, но последовательный — контрольный режим ЭПИК-0."""
+
+    parallel = False
+
+
+async def test_sequential_stays_sequential_by_default() -> None:
+    sites = [SiteConfig(domain=f"s{i}.com") for i in range(3)]
+    collector = SleepySequentialCollector(sites, delay=0.05)
+
+    started = time.perf_counter()
+    result = await collector.run_once()
+    elapsed = time.perf_counter() - started
+
+    assert result["sites_ok"] == 3
+    assert elapsed >= 0.15  # 3 задержки по 0.05 сек суммируются

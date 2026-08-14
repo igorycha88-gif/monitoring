@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     log_format: str = "json"
     sites_config_path: str = "config/sites.yml"
 
+    uptime_interval_seconds: int = 60
+    uptime_timeout_seconds: float = 10.0
+    uptime_success_max_code: int = 399
+    ssl_interval_seconds: int = 3600
+    ssl_timeout_seconds: float = 10.0
+
     yandex_metrika_oauth_token: str = ""
     yandex_webmaster_oauth_token: str = ""
 

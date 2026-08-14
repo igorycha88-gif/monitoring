@@ -36,7 +36,8 @@
 ## Стек
 
 - Python ≥ 3.12 (типизация: mypy strict), FastAPI + uvicorn
-- httpx (async), APScheduler 3.x, prometheus_client, structlog, PyYAML
+- httpx (async), APScheduler 3.x, prometheus_client, structlog, PyYAML,
+  cryptography (парсинг TLS-сертификатов)
 - Тесты: pytest + pytest-asyncio + respx; lint: ruff; типы: mypy (pydantic plugin)
 - Docker Compose (project `monitoring`), все порты на 127.0.0.1
 
@@ -54,7 +55,8 @@ monitoring/
 │       ├── health.py        # GET /health
 │       └── sites.py         # GET /api/v1/sites
 ├── collectors/
-│   └── base.py              # BaseCollector: метрики, логи, ретраи, расписание
+│   ├── base.py              # BaseCollector: метрики, логи, ретраи, расписание, parallel
+│   └── uptime.py            # UptimeCollector (HTTP) + SSLCollector (сертификаты) [ЭПИК-1]
 ├── config/
 │   └── sites.yml            # сайты: domain + опц. counter_id / host_id / exporter
 ├── grafana/
@@ -72,14 +74,20 @@ monitoring/
 ### Метрики
 - Имя: `monitoring_<сущность>_<показатель>_<единицы>`
 - `site` (домен из sites.yml) — обязателен в метриках сайтов; `source` — в метриках
-  коллекторов (`uptime`, `metrika`, `webmaster`, `servers`)
+  коллекторов (`uptime`, `ssl`, `metrika`, `webmaster`, `servers`)
 - Counter — только монотонные величины; состояния — gauge
 - Кардинальность: лейбл `query` (ЭПИК-5) — только топ-N (≤ 100)
+- Здоровье САЙТА (`monitoring_uptime_status`) ≠ здоровье КОЛЛЕКТОРА
+  (`monitoring_collector_success`): лежащий сайт — это данные (status=0),
+  а не ошибка коллектора (см. ADR-002)
 
 ### Коллекторы
 - Наследование от `BaseCollector`, реализация `collect_site(site) -> int`
 - Метрики/логи цикла пишет базовый класс; ошибка одного сайта не рвёт цикл
-- Ретраи: `self.retry(...)` — backoff, `retry_on` настраивается (429 — ЭПИК-2)
+- Ретраи: `self.retry(...)` — backoff, `retry_on` настраивается (429 — ЭПИК-2);
+  uptime-проверка — без ретраев (цикл 60 сек = ретрай), SSL — с ретраями (ADR-002)
+- `parallel = True` — параллельный обход сайтов (uptime/ssl); API-коллекторы
+  (Метрика/Вебмастер) — последовательные (`parallel=False`, лимиты API)
 - Токены только из Settings (.env); никогда в коде/коммитах
 
 ### Логирование

@@ -11,6 +11,8 @@ from prometheus_client import make_asgi_app
 from app.api.v1 import health, sites
 from app.config import get_settings
 from app.logging import get_logger, setup_logging
+from app.sites import load_sites
+from collectors.uptime import SSLCollector, UptimeCollector
 
 logger = get_logger("app")
 
@@ -20,10 +22,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Инициализация/остановка: логирование + планировщик коллекторов."""
     settings = get_settings()
     setup_logging(settings.log_level, settings.log_format)
+    sites_list = load_sites(settings.sites_config_path)
     scheduler = AsyncIOScheduler(timezone="UTC")
+    uptime_collector = UptimeCollector(
+        sites_list,
+        timeout_seconds=settings.uptime_timeout_seconds,
+        success_max_code=settings.uptime_success_max_code,
+    )
+    uptime_collector.register(scheduler, settings.uptime_interval_seconds)
+    ssl_collector = SSLCollector(sites_list, timeout_seconds=settings.ssl_timeout_seconds)
+    ssl_collector.register(scheduler, settings.ssl_interval_seconds)
     scheduler.start()
     app.state.scheduler = scheduler
-    logger.info("app_started", scheduler_running=scheduler.running)
+    logger.info(
+        "app_started",
+        scheduler_running=scheduler.running,
+        sites=len(sites_list),
+        collectors=["uptime", "ssl"],
+    )
     try:
         yield
     finally:

@@ -19,3 +19,27 @@ COLLECTOR_DURATION_SECONDS = Gauge(
     "Длительность последнего сбора по сайту, в секундах",
     ["source", "site"],
 )
+
+UPTIME_STATUS = Gauge(
+    "monitoring_uptime_status",
+    "Доступность сайта: 1 — HTTP-ответ с кодом <= порога, 0 — недоступен или ошибка",
+    ["site"],
+)
+
+UPTIME_RESPONSE_SECONDS = Gauge(
+    "monitoring_uptime_response_seconds",
+    "Время ответа сайта на HTTP-проверку, в секундах",
+    ["site"],
+)
+
+UPTIME_RESPONSE_CODE = Gauge(
+    "monitoring_uptime_response_code",
+    "Итоговый HTTP-код ответа сайта; 0 — ответа не получено",
+    ["site"],
+)
+
+SSL_DAYS_LEFT = Gauge(
+    "monitoring_ssl_days_left",
+    "Дней до истечения TLS-сертификата сайта; отрицательное значение — просрочен",
+    ["site"],
+)

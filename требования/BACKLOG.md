@@ -28,7 +28,7 @@
 | TASK-005 | Инфраструктура: Dockerfile, docker-compose (app 8088 + prometheus 9091 + grafana 3300, всё на 127.0.0.1), prometheus.yml, provisioning Grafana | `docker compose -p monitoring up` → все healthy |
 | TASK-006 | Инструменты качества: pytest + pytest-asyncio + respx, ruff, mypy strict настроены | `pytest && ruff check . && mypy .` зелёные на каркасе |
 
-### ЭПИК-1: Uptime-коллектор — `☐`
+### ЭПИК-1: Uptime-коллектор — `✅`
 
 Цель: HTTP/SSL-проверки всех сайтов из sites.yml.
 
