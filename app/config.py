@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     metrika_interval_seconds: int = 300
     metrika_timeout_seconds: float = 10.0
 
+    webmaster_interval_seconds: int = 3600
+    webmaster_timeout_seconds: float = 10.0
+    webmaster_top_queries: int = 50
+
     yandex_metrika_oauth_token: str = ""
     yandex_webmaster_oauth_token: str = ""
 

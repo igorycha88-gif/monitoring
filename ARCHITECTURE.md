@@ -56,7 +56,9 @@ monitoring/
 │       └── sites.py         # GET /api/v1/sites
 ├── collectors/
 │   ├── base.py              # BaseCollector: метрики, логи, ретраи, расписание, parallel
-│   └── uptime.py            # UptimeCollector (HTTP) + SSLCollector (сертификаты) [ЭПИК-1]
+│   ├── uptime.py            # UptimeCollector (HTTP) + SSLCollector (сертификаты) [ЭПИК-1]
+│   ├── metrika.py           # MetrikaCollector (визиты/посетители) [ЭПИК-2]
+│   └── webmaster.py         # WebmasterCollector (поисковые запросы) [ЭПИК-5]
 ├── config/
 │   └── sites.yml            # сайты: domain + опц. counter_id / host_id / exporter
 ├── grafana/
@@ -78,7 +80,11 @@ monitoring/
 - `site` (домен из sites.yml) — обязателен в метриках сайтов; `source` — в метриках
   коллекторов (`uptime`, `ssl`, `metrika`, `webmaster`, `servers`)
 - Counter — только монотонные величины; состояния — gauge
-- Кардинальность: лейбл `query` (ЭПИК-5) — только топ-N (≤ 100)
+- Кардинальность: лейбл `query` (ЭПИК-5) — только топ-N (≤ 100);
+  текст запроса нормализуется (пробелы + обрезка 100 символов), метрики
+  поиска — `monitoring_search_clicks_total` / `monitoring_search_shows_total` /
+  `monitoring_search_position` с лейблами `{site, query}` (DoD, gauge,
+  окно «последняя неделя» — ADR-004)
 - Здоровье САЙТА (`monitoring_uptime_status`) ≠ здоровье КОЛЛЕКТОРА
   (`monitoring_collector_success`): лежащий сайт — это данные (status=0),
   а не ошибка коллектора (см. ADR-002)

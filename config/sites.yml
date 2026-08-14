@@ -7,5 +7,8 @@ sites:
   # Пример с Метрикой (ЭПИК-2):
   # - domain: example.com
   #   metrika_counter_id: 12345678
+  # Пример с Вебмастером (ЭПИК-5): host_id из API Вебмастера (GET /v4/user/{uid}/hosts)
+  # - domain: example.com
+  #   webmaster_host_id: "https:example.com:443"
   - domain: example.com
   - domain: example.org

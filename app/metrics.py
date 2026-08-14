@@ -55,3 +55,23 @@ SITE_VISITORS = Gauge(
     "Уникальные посетители сайта за текущий день (нарастающий итог, UTC)",
     ["site", "source"],
 )
+
+SEARCH_CLICKS_TOTAL = Gauge(
+    "monitoring_search_clicks_total",
+    "Клики по поисковому запросу за последнюю неделю (скользящее окно Вебмастера); "
+    "gauge — применять напрямую, без rate()",
+    ["site", "query"],
+)
+
+SEARCH_SHOWS_TOTAL = Gauge(
+    "monitoring_search_shows_total",
+    "Показы по поисковому запросу за последнюю неделю (скользящее окно Вебмастера); "
+    "gauge — применять напрямую, без rate()",
+    ["site", "query"],
+)
+
+SEARCH_POSITION = Gauge(
+    "monitoring_search_position",
+    "Средняя позиция показа поискового запроса за последнюю неделю; меньше — лучше",
+    ["site", "query"],
+)

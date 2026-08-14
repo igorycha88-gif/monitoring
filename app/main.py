@@ -14,6 +14,7 @@ from app.logging import get_logger, setup_logging
 from app.sites import SiteConfig, load_sites
 from collectors.metrika import MetrikaCollector
 from collectors.uptime import SSLCollector, UptimeCollector
+from collectors.webmaster import WebmasterCollector
 
 logger = get_logger("app")
 
@@ -45,6 +46,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         collectors.append("metrika")
     else:
         logger.info("metrika_collector_skipped", reason="no_counters")
+    if _sites_with_webmaster(sites_list):
+        webmaster_collector = WebmasterCollector(
+            sites_list,
+            oauth_token=settings.yandex_webmaster_oauth_token,
+            timeout_seconds=settings.webmaster_timeout_seconds,
+            top_queries=settings.webmaster_top_queries,
+        )
+        webmaster_collector.register(scheduler, settings.webmaster_interval_seconds)
+        collectors.append("webmaster")
+    else:
+        logger.info("webmaster_collector_skipped", reason="no_hosts")
     scheduler.start()
     app.state.scheduler = scheduler
     logger.info(
@@ -63,6 +75,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def _sites_with_counters(sites: list[SiteConfig]) -> list[SiteConfig]:
     """Сайты, у которых настроен счётчик Метрики."""
     return [site for site in sites if site.metrika_counter_id is not None]
+
+
+def _sites_with_webmaster(sites: list[SiteConfig]) -> list[SiteConfig]:
+    """Сайты, у которых настроен host_id Вебмастера."""
+    return [site for site in sites if site.webmaster_host_id is not None]
 
 
 def create_app() -> FastAPI:
