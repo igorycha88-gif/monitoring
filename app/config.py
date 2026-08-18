@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     yandex_metrika_oauth_token: str = ""
     yandex_webmaster_oauth_token: str = ""
 
+    # ЭПИК-9: health-коллектор эндпоинтов метрик сайтов (ADR-007)
+    site_metrics_interval_seconds: int = 60
+    site_metrics_timeout_seconds: float = 10.0
+    site_metrics_api_key: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

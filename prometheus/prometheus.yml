@@ -27,3 +27,39 @@ scrape_configs:
     http_sd_configs:
       - url: http://app:8088/api/v1/sd/node-exporter
         refresh_interval: 60s
+
+  # ЭПИК-9 (ADR-007): метрики сайтов за X-Monitoring-key (nginx 443).
+  # Цели — из поля metrics_urls в config/sites.yml (HTTP SD, refresh 60s).
+  # Значение ключа подставляет prometheus-entrypoint.sh из env
+  # SITE_METRICS_API_KEY (в файле — только плейсхолдер).
+  - job_name: site-tracking
+    http_sd_configs:
+      - url: http://app:8088/api/v1/sd/site-metrics/tracking
+        refresh_interval: 60s
+    http_headers:
+      X-Monitoring-Key:
+        values: ["__SITE_METRICS_API_KEY__"]
+
+  - job_name: site-content
+    http_sd_configs:
+      - url: http://app:8088/api/v1/sd/site-metrics/content
+        refresh_interval: 60s
+    http_headers:
+      X-Monitoring-Key:
+        values: ["__SITE_METRICS_API_KEY__"]
+
+  - job_name: site-node
+    http_sd_configs:
+      - url: http://app:8088/api/v1/sd/site-metrics/node
+        refresh_interval: 60s
+    http_headers:
+      X-Monitoring-Key:
+        values: ["__SITE_METRICS_API_KEY__"]
+
+  - job_name: site-postgres
+    http_sd_configs:
+      - url: http://app:8088/api/v1/sd/site-metrics/postgres
+        refresh_interval: 60s
+    http_headers:
+      X-Monitoring-Key:
+        values: ["__SITE_METRICS_API_KEY__"]

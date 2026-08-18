@@ -17,11 +17,14 @@ services:
     image: prom/prometheus:latest
     container_name: monitoring-prometheus
     restart: unless-stopped
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.retention.time=90d
+    # ЭПИК-9 (ADR-007 D3): ключ X-Monitoring-Key подставляется в конфиг
+    # entrypoint-скриптом из env; в prometheus.yml — только плейсхолдер.
+    environment:
+      SITE_METRICS_API_KEY: ${SITE_METRICS_API_KEY:-}
+    entrypoint: ["/bin/sh", "/etc/prometheus/prometheus-entrypoint.sh"]
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml.tmpl:ro
+      - ./prometheus/prometheus-entrypoint.sh:/etc/prometheus/prometheus-entrypoint.sh:ro
       - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
     ports:

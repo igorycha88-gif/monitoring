@@ -13,6 +13,7 @@ from app.config import get_settings
 from app.logging import get_logger, setup_logging
 from app.sites import SiteConfig, load_sites
 from collectors.metrika import MetrikaCollector
+from collectors.sitemetrics import SiteMetricsCollector
 from collectors.uptime import SSLCollector, UptimeCollector
 from collectors.webmaster import WebmasterCollector
 
@@ -57,6 +58,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         collectors.append("webmaster")
     else:
         logger.info("webmaster_collector_skipped", reason="no_hosts")
+    if _sites_with_metrics_urls(sites_list):
+        if not settings.site_metrics_api_key:
+            logger.warning(
+                "site_metrics_api_key_empty",
+                reason="SITE_METRICS_API_KEY не задан — эндпоинты ответят 403, up будет 0",
+            )
+        site_metrics_collector = SiteMetricsCollector(
+            sites_list,
+            timeout_seconds=settings.site_metrics_timeout_seconds,
+            api_key=settings.site_metrics_api_key,
+        )
+        site_metrics_collector.register(scheduler, settings.site_metrics_interval_seconds)
+        collectors.append("site-metrics")
+    else:
+        logger.info("site_metrics_collector_skipped", reason="no_metrics_urls")
     scheduler.start()
     app.state.scheduler = scheduler
     logger.info(
@@ -80,6 +96,11 @@ def _sites_with_counters(sites: list[SiteConfig]) -> list[SiteConfig]:
 def _sites_with_webmaster(sites: list[SiteConfig]) -> list[SiteConfig]:
     """Сайты, у которых настроен host_id Вебмастера."""
     return [site for site in sites if site.webmaster_host_id is not None]
+
+
+def _sites_with_metrics_urls(sites: list[SiteConfig]) -> list[SiteConfig]:
+    """Сайты с эндпоинтами метрик за X-Monitoring-Key (ЭПИК-9)."""
+    return [site for site in sites if site.metrics_urls]
 
 
 def create_app() -> FastAPI:

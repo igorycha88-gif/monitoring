@@ -75,3 +75,22 @@ SEARCH_POSITION = Gauge(
     "Средняя позиция показа поискового запроса за последнюю неделю; меньше — лучше",
     ["site", "query"],
 )
+
+SITE_METRICS_UP = Gauge(
+    "monitoring_site_metrics_up",
+    "Доступность эндпоинта метрик сайта (1 — HTTP 2xx с корректным ключом, "
+    "0 — ошибка/отказ; ADR-007)",
+    ["site", "kind"],
+)
+
+SITE_METRICS_RESPONSE_CODE = Gauge(
+    "monitoring_site_metrics_response_code",
+    "HTTP-код ответа эндпоинта метрик сайта; 0 — ответа не получено (ADR-007)",
+    ["site", "kind"],
+)
+
+SITE_METRICS_LATENCY_SECONDS = Gauge(
+    "monitoring_site_metrics_latency_seconds",
+    "Время ответа эндпоинта метрик сайта, в секундах (ADR-007)",
+    ["site", "kind"],
+)

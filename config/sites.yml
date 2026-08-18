@@ -3,6 +3,8 @@
 #   metrika_counter_id — ID счётчика Яндекс.Метрики (ЭПИК-2)
 #   webmaster_host_id  — host_id Яндекс.Вебмастера (ЭПИК-5)
 #   node_exporter_url  — URL node_exporter сервера сайта (ЭПИК-6)
+#   metrics_urls       — эндпоинты метрик сайта за X-Monitoring-Key (ЭПИК-9, ADR-007);
+#                        ключ — SITE_METRICS_API_KEY в .env
 sites:
   # Пример с Метрикой (ЭПИК-2):
   # - domain: example.com
@@ -13,5 +15,18 @@ sites:
   # Пример с серверными метриками (ЭПИК-6): URL node_exporter сервера сайта
   # - domain: example.com
   #   node_exporter_url: http://203.0.113.10:9100
+  # Пример с метриками за ключом (ЭПИК-9):
+  # - domain: example.com
+  #   metrics_urls:
+  #     tracking: https://example.com/metrics/tracking
+  #     content: https://example.com/metrics/content
+  #     node: https://example.com/metrics/node
+  #     postgres: https://example.com/metrics/postgres
   - domain: example.com
   - domain: example.org
+  - domain: da-dryclean.ru
+    metrics_urls:
+      tracking: https://da-dryclean.ru/metrics/tracking
+      content: https://da-dryclean.ru/metrics/content
+      node: https://da-dryclean.ru/metrics/node
+      postgres: https://da-dryclean.ru/metrics/postgres

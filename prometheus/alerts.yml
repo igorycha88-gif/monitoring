@@ -69,3 +69,22 @@ groups:
         annotations:
           summary: "Приложение мониторинга не отдаёт метрики"
           description: "Метрика monitoring_uptime_status отсутствует более 5 минут — вероятно, упал monitoring-app или сам Prometheus не может его скрейпить."
+
+      # ЭПИК-9 (ADR-007): эндпоинты метрик сайтов за X-Monitoring-Key
+      - alert: SiteMetricsEndpointDown
+        expr: monitoring_site_metrics_up == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Эндпоинт метрик {{ $labels.kind }} сайта {{ $labels.site }} недоступен"
+          description: "Проверка https-эндпоинта метрик (kind={{ $labels.kind }}) не проходит более 5 минут. Причины: неверный ключ X-Monitoring-Key, nginx/сервис сайта, сеть. Последний HTTP-код: {{ with printf \"monitoring_site_metrics_response_code{site=%q,kind=%q}\" $labels.site $labels.kind | query }}{{ (index . 0).Value }}{{ end }}."
+
+      - alert: SiteNoTraffic
+        expr: business_page_views_24h == 0
+        for: 3h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Нет просмотров сайта {{ $labels.site }} более 24 часов"
+          description: "Трекинг сайта не фиксирует page_view (business_page_views_24h=0 более 3 часов). Сайт может быть доступен, но фронт-трекер сломан либо контент не отдаётся."

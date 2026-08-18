@@ -13,6 +13,12 @@ class SiteConfigError(Exception):
     """Ошибка конфигурации сайтов."""
 
 
+# ЭПИК-9 (ADR-007): допустимые kinds эндпоинтов метрик сайта
+SITE_METRICS_KINDS: frozenset[str] = frozenset(
+    {"tracking", "content", "node", "postgres"}
+)
+
+
 class SiteConfig(BaseModel):
     """Один мониторируемый сайт."""
 
@@ -25,6 +31,10 @@ class SiteConfig(BaseModel):
     )
     node_exporter_url: str | None = Field(
         default=None, description="URL node_exporter сервера сайта"
+    )
+    metrics_urls: dict[str, str] | None = Field(
+        default=None,
+        description="Эндпоинты метрик сайта за X-Monitoring-Key (ADR-007)",
     )
 
     @field_validator("domain")
@@ -61,6 +71,35 @@ class SiteConfig(BaseModel):
         except ValueError as exc:
             raise ValueError(f"некорректный порт в node_exporter_url: {exc}") from exc
         return url
+
+
+    @field_validator("metrics_urls")
+    @classmethod
+    def validate_metrics_urls(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        """Эндпоинты метрик: kinds из whitelist, URL — строго https (ADR-007 D2)."""
+        if value is None:
+            return value
+        if not value:
+            raise ValueError("metrics_urls не может быть пустым (уберите поле)")
+        unknown = sorted(set(value) - SITE_METRICS_KINDS)
+        if unknown:
+            raise ValueError(
+                "неизвестные kinds в metrics_urls: "
+                f"{', '.join(unknown)} (допустимо: {', '.join(sorted(SITE_METRICS_KINDS))})"
+            )
+        for kind, url in value.items():
+            parsed = urlsplit(url)
+            if parsed.scheme != "https":
+                raise ValueError(f"metrics_urls.{kind} должен начинаться с https://")
+            if not parsed.hostname:
+                raise ValueError(f"metrics_urls.{kind} должен содержать host")
+            if parsed.query or parsed.fragment:
+                raise ValueError(
+                    f"metrics_urls.{kind} не должен содержать query (?) или fragment (#)"
+                )
+            if not parsed.path or parsed.path == "/":
+                raise ValueError(f"metrics_urls.{kind} должен содержать путь (например /metrics/{kind})")
+        return value
 
 
 def load_sites(path: str | Path) -> list[SiteConfig]:
