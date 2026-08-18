@@ -76,6 +76,69 @@ def test_duplicate_domains_rejected(tmp_path: Path) -> None:
         load_sites(write_config(tmp_path, "sites:\n  - domain: a.com\n  - domain: a.com\n"))
 
 
+def test_node_exporter_url_without_scheme_rejected(tmp_path: Path) -> None:
+    with pytest.raises(SiteConfigError, match="http:// или https://"):
+        load_sites(
+            write_config(
+                tmp_path, 'sites:\n  - domain: a.com\n    node_exporter_url: "10.0.0.1:9100"\n'
+            )
+        )
+
+
+def test_node_exporter_url_wrong_scheme_rejected(tmp_path: Path) -> None:
+    with pytest.raises(SiteConfigError, match="http:// или https://"):
+        load_sites(
+            write_config(
+                tmp_path,
+                'sites:\n  - domain: a.com\n    node_exporter_url: "ftp://10.0.0.1:9100"\n',
+            )
+        )
+
+
+def test_node_exporter_url_empty_host_rejected(tmp_path: Path) -> None:
+    with pytest.raises(SiteConfigError, match="host"):
+        load_sites(
+            write_config(tmp_path, 'sites:\n  - domain: a.com\n    node_exporter_url: "http://"\n')
+        )
+
+
+def test_node_exporter_url_empty_string_rejected(tmp_path: Path) -> None:
+    with pytest.raises(SiteConfigError, match="пустым"):
+        load_sites(
+            write_config(tmp_path, 'sites:\n  - domain: a.com\n    node_exporter_url: "  "\n')
+        )
+
+
+def test_node_exporter_url_with_query_rejected(tmp_path: Path) -> None:
+    with pytest.raises(SiteConfigError, match="query"):
+        load_sites(
+            write_config(
+                tmp_path,
+                'sites:\n  - domain: a.com\n    node_exporter_url: "http://10.0.0.1:9100?x=1"\n',
+            )
+        )
+
+
+def test_node_exporter_url_invalid_port_rejected(tmp_path: Path) -> None:
+    with pytest.raises(SiteConfigError, match="порт"):
+        load_sites(
+            write_config(
+                tmp_path,
+                'sites:\n  - domain: a.com\n    node_exporter_url: "http://10.0.0.1:abc"\n',
+            )
+        )
+
+
+def test_node_exporter_url_valid_accepted(tmp_path: Path) -> None:
+    sites = load_sites(
+        write_config(
+            tmp_path,
+            'sites:\n  - domain: a.com\n    node_exporter_url: "http://10.0.0.1:9100/metrics"\n',
+        )
+    )
+    assert sites[0].node_exporter_url == "http://10.0.0.1:9100/metrics"
+
+
 def test_site_config_is_public_model() -> None:
     site = SiteConfig(domain="x.com")
     assert site.model_dump() == {

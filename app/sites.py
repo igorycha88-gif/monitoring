@@ -1,6 +1,7 @@
 """Загрузка и валидация конфигурации сайтов (config/sites.yml)."""
 
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -38,6 +39,28 @@ class SiteConfig(BaseModel):
         if "/" in domain:
             raise ValueError("domain должен быть доменом без пути")
         return domain
+
+    @field_validator("node_exporter_url")
+    @classmethod
+    def validate_node_exporter_url(cls, value: str | None) -> str | None:
+        """URL node_exporter: схема http/https, непустой host, без query/fragment."""
+        if value is None:
+            return value
+        url = value.strip()
+        if not url:
+            raise ValueError("node_exporter_url не может быть пустым (уберите поле)")
+        parsed = urlsplit(url)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError("node_exporter_url должен начинаться с http:// или https://")
+        if not parsed.hostname:
+            raise ValueError("node_exporter_url должен содержать host")
+        if parsed.query or parsed.fragment:
+            raise ValueError("node_exporter_url не должен содержать query (?) или fragment (#)")
+        try:
+            _ = parsed.port
+        except ValueError as exc:
+            raise ValueError(f"некорректный порт в node_exporter_url: {exc}") from exc
+        return url
 
 
 def load_sites(path: str | Path) -> list[SiteConfig]:

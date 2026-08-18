@@ -76,11 +76,13 @@ def test_exprs_filter_by_site_variable() -> None:
             )
 
 
-def test_no_rate_or_increase() -> None:
-    # Все метрики проекта — gauge; rate()/increase() недопустимы
+def test_no_rate_or_increase_on_project_metrics() -> None:
+    # Метрики проекта monitoring_* — gauge: rate()/increase() недопустимы.
+    # node_* (node_exporter, ЭПИК-6) — counter: rate() для них разрешён (ADR-005).
     for name in DASHBOARD_NAMES:
         for expr in panel_exprs(load_dashboard(name)):
-            assert "rate(" not in expr and "increase(" not in expr, f"{name}: {expr!r}"
+            if "rate(" in expr or "increase(" in expr:
+                assert "monitoring_" not in expr, f"{name}: {expr!r}"
 
 
 def test_threshold_steps_sorted_ascending() -> None:
@@ -112,7 +114,7 @@ def test_panels_use_provisioned_prometheus_datasource() -> None:
 
 def test_site_overview_structure() -> None:
     dashboard = load_dashboard("site-overview.json")
-    assert len(dashboard["panels"]) == 8
+    assert len(dashboard["panels"]) == 12
     titles = {panel["title"] for panel in dashboard["panels"]}
     assert titles == {
         "Доступность",
@@ -123,6 +125,10 @@ def test_site_overview_structure() -> None:
         "Визиты (нарастающий итог дня)",
         "Посетители (нарастающий итог дня)",
         "Длительность сбора коллекторов",
+        "CPU, %",
+        "RAM, %",
+        "Диск /, %",
+        "Load average (1m)",
     }
     var = dashboard["templating"]["list"][0]
     assert var["name"] == "site"
@@ -130,6 +136,20 @@ def test_site_overview_structure() -> None:
     assert var["multi"] is False
     assert var["includeAll"] is False
     assert "label_values" in str(var["query"]["query"])
+
+
+def test_site_overview_server_panels() -> None:
+    # ЭПИК-6: серверные панели используют node_exporter-метрики с фильтром site
+    dashboard = load_dashboard("site-overview.json")
+    by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+    cpu = by_title["CPU, %"]["targets"][0]["expr"]
+    assert "node_cpu_seconds_total" in cpu and 'site="$site"' in cpu
+    ram = by_title["RAM, %"]["targets"][0]["expr"]
+    assert "node_memory_MemAvailable_bytes" in ram and "node_memory_MemTotal_bytes" in ram
+    disk = by_title["Диск /, %"]["targets"][0]["expr"]
+    assert "node_filesystem_avail_bytes" in disk and "node_filesystem_size_bytes" in disk
+    load_avg = by_title["Load average (1m)"]["targets"][0]["expr"]
+    assert load_avg == 'node_load1{site="$site"}'
 
 
 def test_all_sites_structure() -> None:

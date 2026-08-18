@@ -10,5 +10,8 @@ sites:
   # Пример с Вебмастером (ЭПИК-5): host_id из API Вебмастера (GET /v4/user/{uid}/hosts)
   # - domain: example.com
   #   webmaster_host_id: "https:example.com:443"
+  # Пример с серверными метриками (ЭПИК-6): URL node_exporter сервера сайта
+  # - domain: example.com
+  #   node_exporter_url: http://203.0.113.10:9100
   - domain: example.com
   - domain: example.org

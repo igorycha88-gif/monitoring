@@ -8,7 +8,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from app.api.v1 import health, sites
+from app.api.v1 import health, sd, sites
 from app.config import get_settings
 from app.logging import get_logger, setup_logging
 from app.sites import SiteConfig, load_sites
@@ -87,6 +87,7 @@ def create_app() -> FastAPI:
     application = FastAPI(title="Monitoring", version="0.1.0", lifespan=lifespan)
     application.include_router(health.router)
     application.include_router(sites.router, prefix="/api/v1")
+    application.include_router(sd.router, prefix="/api/v1")
 
     @application.middleware("http")
     async def log_requests(
