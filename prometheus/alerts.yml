@@ -1,0 +1,71 @@
+# Правила алертов (ЭПИК-7, ADR-006).
+# Загружаются Prometheus'ом через rule_files в prometheus.yml.
+# Проверка синтаксиса: promtool check rules /etc/prometheus/alerts.yml
+
+groups:
+  - name: sites
+    rules:
+      - alert: SiteDown
+        expr: monitoring_uptime_status == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Сайт {{ $labels.site }} недоступен"
+          description: "HTTP-проверка сайта {{ $labels.site }} не проходит более 3 минут (uptime_status=0)."
+
+      - alert: SiteSslExpiringSoon
+        expr: monitoring_ssl_days_left < 14
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Сертификат {{ $labels.site }} истекает менее чем через 14 дней"
+          description: "Осталось {{ $value | printf \"%.0f\" }} дней до истечения TLS-сертификата."
+
+      - alert: SiteSslExpiringCritical
+        expr: monitoring_ssl_days_left < 3
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "Сертификат {{ $labels.site }} истекает менее чем через 3 дня"
+          description: "Осталось {{ $value | printf \"%.0f\" }} дней до истечения TLS-сертификата — требуется срочное продление."
+
+      - alert: SiteTrafficDrop
+        expr: >
+          monitoring_site_visits_total{source="metrika"} < 0.5 * (monitoring_site_visits_total{source="metrika"} offset 24h)
+          and on(site) (monitoring_site_visits_total{source="metrika"} offset 24h) > 10
+        for: 2h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Трафик {{ $labels.site }} просел более чем вдвое"
+          description: "Визитов сегодня меньше 50% от значения вчера в это же время (при вчерашних более 10)."
+
+      - alert: CollectorFailing
+        expr: monitoring_collector_success == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Коллектор {{ $labels.source }} не собирает данные по {{ $labels.site }}"
+          description: "Сбор по источнику {{ $labels.source }} падает более 15 минут. Проверить токены/лимиты внешнего API и логи приложения."
+
+      - alert: NodeExporterDown
+        expr: up{job="node-exporter"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "node_exporter сайта {{ $labels.site }} недоступен"
+          description: "Серверные метрики сайта {{ $labels.site }} не собираются более 5 минут ({{ $labels.instance }})."
+
+      - alert: MonitoringAppDown
+        expr: absent(monitoring_uptime_status)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Приложение мониторинга не отдаёт метрики"
+          description: "Метрика monitoring_uptime_status отсутствует более 5 минут — вероятно, упал monitoring-app или сам Prometheus не может его скрейпить."

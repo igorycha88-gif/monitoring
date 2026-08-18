@@ -14,17 +14,27 @@
 │  │  ├── /health        — healthcheck             │          │
 │  │  ├── /metrics       — prometheus_client       │          │
 │  │  ├── /api/v1/sites  — список сайтов           │          │
+│  │  ├── /api/v1/sd/node-exporter — HTTP SD [ЭПИК-6]
 │  │  └── APScheduler    — расписание коллекторов  │          │
 │  │       ├── collectors/uptime.py    [ЭПИК-1]    │──▶ HTTP/SSL сайтов
 │  │       ├── collectors/metrika.py   [ЭПИК-2]    │──▶ Яндекс.Метрика API
 │  │       ├── collectors/webmaster.py [ЭПИК-5]    │──▶ Яндекс.Вебмастер API
-│  │       └── collectors/servers.py   [ЭПИК-6]    │──▶ node_exporter
 │  └──────────────────────┬────────────────────────┘          │
 │                         │ /metrics (pull, 15s)              │
 │  ┌──────────────────────▼────────────────────────┐          │
 │  │ Prometheus (127.0.0.1:9091)                   │          │
-│  └──────────────────────┬────────────────────────┘          │
-│                         │ datasource                        │
+│  │   ├── http_sd: /api/v1/sd/node-exporter [ЭПИК-6]
+│  │   ├── rules: /etc/prometheus/alerts.yml [ЭПИК-7]
+│  │   └──▶ node_exporter целей (лейбл site из SD) [ЭПИК-6]
+│  │   │ firing alerts [ЭПИК-7]                    │          │
+│  └───┼──────────────────┬────────────────────────┘          │
+│      ▼                  │ datasource                        │
+│  ┌────────────────┐     │                                    │
+│  │ Alertmanager   │     │                                    │
+│  │ (127.0.0.1:    │     │                                    │
+│  │  9093) [ЭПИК-7]│     │                                    │
+│  │ └─▶ Telegram   │     │                                    │
+│  └────────────────┘     │                                    │
 │  ┌──────────────────────▼────────────────────────┐          │
 │  │ Grafana (127.0.0.1:3300) — provisioning       │          │
 │  └───────────────────────────────────────────────┘          │
@@ -53,7 +63,8 @@ monitoring/
 │   ├── metrics.py           # реестр метрик monitoring_*
 │   └── api/v1/
 │       ├── health.py        # GET /health
-│       └── sites.py         # GET /api/v1/sites
+│       ├── sites.py         # GET /api/v1/sites
+│       └── sd.py            # GET /api/v1/sd/node-exporter — HTTP SD [ЭПИК-6]
 ├── collectors/
 │   ├── base.py              # BaseCollector: метрики, логи, ретраи, расписание, parallel
 │   ├── uptime.py            # UptimeCollector (HTTP) + SSLCollector (сертификаты) [ЭПИК-1]
@@ -66,9 +77,13 @@ monitoring/
 │   │   ├── site-overview.json  # «Обзор сайта» (переменная site, 8 панелей)
 │   │   └── all-sites.json      # «Все сайты» (таблица статусов + спарклайны)
 │   └── provisioning/        # datasources (uid: prometheus) + dashboards
-├── prometheus/prometheus.yml
+├── prometheus/
+│   ├── prometheus.yml       # scrape + rule_files + alerting→alertmanager [ЭПИК-7]
+│   ├── alerts.yml           # правила алертов [ЭПИК-7, ADR-006]
+│   ├── alertmanager.yml     # конфиг Alertmanager (шаблон с подстановкой) [ЭПИК-7]
+│   └── alertmanager-entrypoint.sh
 ├── tests/
-├── docker-compose.yml       # app 8088 + prometheus 9091 + grafana 3300
+├── docker-compose.yml       # app 8088 + prometheus 9091 + alertmanager 9093 + grafana 3300
 ├── Dockerfile
 └── .env.example             # шаблон секретов (.env НЕ в git, chmod 600)
 ```
@@ -109,6 +124,33 @@ monitoring/
 - Валидация JSON-дашбордов — `tests/test_dashboards.py`
   (белый список метрик синхронизирован с `app/metrics.py`)
 
+### Серверные метрики node_exporter (ЭПИК-6, ADR-005)
+- Python-коллектора НЕТ: Prometheus скрейпит node_exporter напрямую через
+  `http_sd_configs` → `GET /api/v1/sd/node-exporter` (единый источник
+  целей — `config/sites.yml`, поле `node_exporter_url`; refresh 60s)
+- SD-ответ: `[{"targets": ["host:port"], "labels": {"site": "<домен>"}}]`;
+  лейбл `site` из SD прикрепляется ко всем `node_*`-метрикам таргета
+- Порт по умолчанию 9100; path из URL → `__metrics_path__`,
+  https → `__scheme__`
+- Здоровье цели — встроенная метрика `up{job="node-exporter"}`;
+  `monitoring_collector_*` для серверных метрик не заводятся
+- В дашбордах `rate()` разрешён ТОЛЬКО для `node_*` (counter);
+  метрики проекта `monitoring_*` — gauge, без rate()/increase()
+
+### Алерты (ЭПИК-7, ADR-006)
+- Правила — `prometheus/alerts.yml` (rules-as-code): SiteDown (3m, critical),
+  SiteSslExpiringSoon (<14d, warning) / SiteSslExpiringCritical (<3d,
+  critical), SiteTrafficDrop (<50% к `offset 24h` при вчерашних >10, 2h),
+  CollectorFailing (15m), NodeExporterDown (5m), MonitoringAppDown
+  (absent, 5m, critical)
+- Доставка — Alertmanager (`monitoring-alertmanager`, 127.0.0.1:9093) →
+  Telegram Bot API; группировка `[alertname, site]`, repeat 12h,
+  `send_resolved: true`; critical глушит warning того же сайта (inhibit)
+- Секреты `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` — только `.env`;
+  подстановка в конфиг — entrypoint-скриптом при старте контейнера
+- `monitoring_*`-метрики в выражениях — gauge, БЕЗ rate()/increase();
+  сравнение дней — только `offset`
+
 ### Логирование
 - structlog, JSON; события: `http_request`, `collector_cycle_start/end`,
   `collector_site_success/error`, `collector_retry`, `collector_registered`
@@ -119,7 +161,8 @@ monitoring/
 | Сервис | Порт | Назначение |
 |--------|------|-----------|
 | monitoring-app | 8088 | API + /metrics |
-| prometheus | 9091 | TSDB (retention 90d) |
+| prometheus | 9091 | TSDB (retention 90d) + правила алертов |
+| alertmanager | 9093 | маршрутизация алертов → Telegram [ЭПИК-7] |
 | grafana | 3300 | визуализация (admin, anonymous off) |
 
 ## Запуск и проверки

@@ -22,13 +22,41 @@ services:
       - --storage.tsdb.retention.time=90d
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
     ports:
       - "127.0.0.1:9091:9090"
     networks:
       - monitoring-net
+    depends_on:
+      - alertmanager
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ЭПИК-7: маршрутизация алертов Prometheus → Telegram (ADR-006).
+  # Секреты TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID — из .env (никогда в git);
+  # подставляются в конфиг entrypoint-скриптом при старте.
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: monitoring-alertmanager
+    restart: unless-stopped
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    entrypoint: ["/bin/sh", "/etc/alertmanager/alertmanager-entrypoint.sh"]
+    volumes:
+      - ./prometheus/alertmanager.yml:/etc/alertmanager/alertmanager.yml.tmpl:ro
+      - ./prometheus/alertmanager-entrypoint.sh:/etc/alertmanager/alertmanager-entrypoint.sh:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"
+    networks:
+      - monitoring-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9093/-/healthy"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -62,4 +90,5 @@ networks:
 
 volumes:
   prometheus-data:
+  alertmanager-data:
   grafana-data:
