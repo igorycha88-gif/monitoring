@@ -82,6 +82,9 @@ monitoring/
 │   ├── alerts.yml           # правила алертов [ЭПИК-7, ADR-006]
 │   ├── alertmanager.yml     # конфиг Alertmanager (шаблон с подстановкой) [ЭПИК-7]
 │   └── alertmanager-entrypoint.sh
+├── scripts/
+│   ├── backup.sh            # бэкап конфигов+дашбордов+.env (tar.gz+sha256, ротация 14) [ЭПИК-8]
+│   └── restore.sh           # восстановление из архива (sha256-проверка, .env только с --with-env) [ЭПИК-8]
 ├── tests/
 ├── docker-compose.yml       # app 8088 + prometheus 9091 + alertmanager 9093 + grafana 3300
 ├── Dockerfile
@@ -150,6 +153,22 @@ monitoring/
   подстановка в конфиг — entrypoint-скриптом при старте контейнера
 - `monitoring_*`-метрики в выражениях — gauge, БЕЗ rate()/increase();
   сравнение дней — только `offset`
+
+### Эксплуатация (ЭПИК-8)
+- fail2ban на VPS: jail `sshd` (backend systemd, 5 попыток/10м → бан 1ч,
+  инкремент ×2 до 1нед), `ignoreip 127.0.0.1/8`; iptables-цепочка `f2b-sshd`
+  вешается ТОЛЬКО на порт 22 — чужие порты не затрагиваются.
+  SSH-конфиг (PasswordAuthentication) и ufw — не трогаем (решения владельца).
+- Бэкапы (VPS): cron root `0 3 * * *` → `scripts/backup.sh` — tar.gz
+  (config/ + prometheus/ + grafana/ + docker-compose.yml + Dockerfile + .env)
+  в `/root/backups/monitoring/` (0700/0600) + `.sha256`; ротация — 14 копий.
+  Лог: `/var/log/monitoring-backup.log` + syslog (`monitoring-backup`).
+- Восстановление: `scripts/restore.sh <архив> [dest] [--with-env]` —
+  sha256-проверка; `.env` восстанавливается только с `--with-env`
+  (без флага существующий `.env` не перезаписывается).
+  Volumes (Grafana sqlite, TSDB) НЕ бэкапятся (решение владельца).
+- Скачивание бэкапа локально:
+  `scp 'root@130.49.129.241:/root/backups/monitoring/monitoring-*.tar.gz' ./backups/`
 
 ### Логирование
 - structlog, JSON; события: `http_request`, `collector_cycle_start/end`,
