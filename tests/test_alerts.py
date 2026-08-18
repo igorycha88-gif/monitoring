@@ -59,6 +59,16 @@ EXPECTED_ALERTS: dict[str, dict[str, str]] = {
         "severity": "critical",
         "expr": "absent(monitoring_uptime_status)",
     },
+    "SiteMetricsEndpointDown": {
+        "for": "5m",
+        "severity": "warning",
+        "expr": "monitoring_site_metrics_up == 0",
+    },
+    "SiteNoTraffic": {
+        "for": "3h",
+        "severity": "warning",
+        "expr": "business_page_views_24h == 0",
+    },
 }
 
 
@@ -169,6 +179,23 @@ class TestEntrypoint:
         assert 'CHAT_ID="0"' not in content
 
 
+class TestPrometheusEntrypoint:
+    """ЭПИК-9 (ADR-007 D3): подстановка ключа в конфиг Prometheus."""
+
+    PROMETHEUS_ENTRYPOINT_SH = PROJECT_ROOT / "prometheus" / "prometheus-entrypoint.sh"
+
+    def test_substitutes_key_placeholder(self) -> None:
+        content = self.PROMETHEUS_ENTRYPOINT_SH.read_text(encoding="utf-8")
+        assert "__SITE_METRICS_API_KEY__" in content
+        assert "SITE_METRICS_API_KEY" in content
+        assert "exec prometheus" in content
+
+    def test_fallback_when_key_missing(self) -> None:
+        content = self.PROMETHEUS_ENTRYPOINT_SH.read_text(encoding="utf-8")
+        assert "NOT_CONFIGURED" in content
+        assert "--storage.tsdb.retention.time=90d" in content
+
+
 class TestComposeWiring:
     def load(self) -> dict[str, Any]:
         data: Any = yaml.safe_load(COMPOSE_YML.read_text(encoding="utf-8"))
@@ -199,6 +226,18 @@ class TestComposeWiring:
 
     def test_prometheus_depends_on_alertmanager(self) -> None:
         assert "alertmanager" in self.load()["prometheus"]["depends_on"]
+
+    def test_prometheus_gets_site_metrics_key_from_env(self) -> None:
+        """ЭПИК-9: ключ уходит в контейнер env'ом, не в конфиге."""
+        prometheus = self.load()["prometheus"]
+        assert "SITE_METRICS_API_KEY" in prometheus["environment"]
+        assert prometheus["entrypoint"] == [
+            "/bin/sh",
+            "/etc/prometheus/prometheus-entrypoint.sh",
+        ]
+        volumes = prometheus["volumes"]
+        assert any("prometheus.yml" in v and v.endswith(".tmpl:ro") for v in volumes)
+        assert any("prometheus-entrypoint.sh" in v for v in volumes)
 
 
 class TestEnvExample:

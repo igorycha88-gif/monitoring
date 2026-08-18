@@ -89,3 +89,72 @@ def test_build_target_defaults_and_ipv6() -> None:
 def test_build_labels_root_path_and_http_omitted() -> None:
     site = SiteConfig(domain="x.com", node_exporter_url="http://1.2.3.4:9100/")
     assert build_labels(site) == {"site": "x.com"}
+
+
+VALID_SITE_METRICS_YAML = """
+sites:
+  - domain: da-dryclean.ru
+    metrics_urls:
+      tracking: https://da-dryclean.ru/metrics/tracking
+      postgres: https://da-dryclean.ru/metrics/postgres
+  - domain: example.com
+"""
+
+
+def test_site_metrics_sd_unknown_kind_404(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_sites_file(tmp_path, VALID_SITE_METRICS_YAML, monkeypatch)
+    response = client.get("/api/v1/sd/site-metrics/billing")
+    assert response.status_code == 404
+    assert "billing" in response.json()["detail"]
+
+
+def test_site_metrics_sd_targets_and_labels(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_sites_file(tmp_path, VALID_SITE_METRICS_YAML, monkeypatch)
+    response = client.get("/api/v1/sd/site-metrics/tracking")
+    assert response.status_code == 200
+    groups = response.json()
+    assert groups == [
+        {
+            "targets": ["da-dryclean.ru:443"],
+            "labels": {
+                "site": "da-dryclean.ru",
+                "__scheme__": "https",
+                "__metrics_path__": "/metrics/tracking",
+            },
+        }
+    ]
+
+
+def test_site_metrics_sd_kind_without_urls_empty(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_sites_file(tmp_path, VALID_SITE_METRICS_YAML, monkeypatch)
+    response = client.get("/api/v1/sd/site-metrics/node")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_site_metrics_sd_broken_config_500(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SITES_CONFIG_PATH", str(tmp_path / "missing.yml"))
+    get_settings.cache_clear()
+    response = client.get("/api/v1/sd/site-metrics/tracking")
+    assert response.status_code == 500
+    assert "не найден" in response.json()["detail"]
+
+
+def test_site_metrics_sd_logs_targets_served(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_sites_file(tmp_path, VALID_SITE_METRICS_YAML, monkeypatch)
+    with capture_logs() as captured:
+        response = client.get("/api/v1/sd/site-metrics/postgres")
+    assert response.status_code == 200
+    served = [event for event in captured if event["event"] == "sd_targets_served"]
+    assert served and served[0]["job"] == "site-postgres"
+    assert served[0]["targets"] == 1

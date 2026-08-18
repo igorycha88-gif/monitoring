@@ -11,7 +11,7 @@ from app import metrics
 
 DASHBOARDS_DIR = Path(__file__).resolve().parent.parent / "grafana" / "dashboards"
 
-DASHBOARD_NAMES = ("site-overview.json", "all-sites.json")
+DASHBOARD_NAMES = ("site-overview.json", "all-sites.json", "site-business.json")
 
 # Белый список собираем из реестра приложения (app/metrics.py),
 # чтобы тест не разошёлся с реальными метриками.
@@ -169,3 +169,56 @@ def test_all_sites_structure() -> None:
     assert var["name"] == "site"
     assert var["multi"] is True
     assert var["includeAll"] is True
+
+
+def test_site_business_structure() -> None:
+    """ЭПИК-9 (ADR-007 D7): дашборд «Бизнес сайта» — 14 панелей."""
+    dashboard = load_dashboard("site-business.json")
+    assert dashboard["uid"] == "site-business"
+    assert len(dashboard["panels"]) == 14
+    titles = {panel["title"] for panel in dashboard["panels"]}
+    assert titles == {
+        "Активные сессии (30 мин)",
+        "Посетители (24ч)",
+        "Лиды (заявки/клики)",
+        "Конверсия в лиды (24ч)",
+        "Отказы (24ч)",
+        "Эндпоинты метрик",
+        "Просмотры страниц",
+        "Сессии и вовлечённость",
+        "События по типам (24ч)",
+        "Клики по услугам (топ-10, 24ч)",
+        "Источники трафика (24ч)",
+        "Гео посетителей (топ-10, 24ч)",
+        "Задержка эндпоинтов метрик",
+        "Длительность сессии (24ч)",
+    }
+    var = dashboard["templating"]["list"][0]
+    assert var["name"] == "site"
+    assert var["multi"] is False
+    assert var["includeAll"] is False
+
+
+def test_site_business_panels_use_business_and_site_metrics() -> None:
+    """Панели используют метрики сайта (business_*) и health-метрики ЭПИКа-9."""
+    exprs = panel_exprs(load_dashboard("site-business.json"))
+    joined = "\n".join(exprs)
+    for metric in (
+        "business_sessions_active",
+        "business_page_views_24h",
+        "business_page_views_1h",
+        "business_unique_visitors_24h",
+        "business_sessions_24h",
+        "business_avg_session_duration_seconds_24h",
+        "business_bounce_rate_24h",
+        "business_leads_24h",
+        "business_leads_1h",
+        "business_conversion_rate_24h",
+        "business_events_24h",
+        "business_referral_sources_24h",
+        "business_geo_visitors_24h",
+        "business_service_clicks_24h",
+    ):
+        assert metric in joined, metric
+    assert "monitoring_site_metrics_up" in joined
+    assert "monitoring_site_metrics_latency_seconds" in joined

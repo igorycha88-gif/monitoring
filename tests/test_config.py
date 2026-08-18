@@ -28,3 +28,22 @@ def test_uptime_ssl_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.uptime_success_max_code == 299
     assert settings.ssl_interval_seconds == 7200
     assert settings.ssl_timeout_seconds == 3.0
+
+
+def test_site_metrics_defaults() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.site_metrics_interval_seconds == 60
+    assert settings.site_metrics_timeout_seconds == 10.0
+    assert settings.site_metrics_api_key == ""
+
+
+def test_site_metrics_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SITE_METRICS_INTERVAL_SECONDS", "30")
+    monkeypatch.setenv("SITE_METRICS_TIMEOUT_SECONDS", "5.0")
+    monkeypatch.setenv("SITE_METRICS_API_KEY", "test-key")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.site_metrics_interval_seconds == 30
+    assert settings.site_metrics_timeout_seconds == 5.0
+    assert settings.site_metrics_api_key == "test-key"

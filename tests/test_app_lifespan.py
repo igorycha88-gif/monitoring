@@ -115,6 +115,69 @@ def test_lifespan_registers_webmaster_collector(
         assert all("webmaster-token" not in str(entry) for entry in captured)
 
 
+def test_lifespan_registers_site_metrics_collector(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_file = tmp_path / "sites.yml"
+    config_file.write_text(
+        "sites:\n"
+        "  - domain: sm-test.com\n"
+        "    metrics_urls:\n"
+        "      tracking: https://sm-test.com/metrics/tracking\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SITES_CONFIG_PATH", str(config_file))
+    monkeypatch.setenv("SITE_METRICS_API_KEY", "sm-secret-key")
+    monkeypatch.setattr(main_module, "setup_logging", lambda *a, **k: None)
+    get_settings.cache_clear()
+
+    with capture_logs() as captured:
+        with TestClient(app) as client:
+            scheduler = app.state.scheduler
+            site_metrics_job = scheduler.get_job("collector_site-metrics")
+
+            response = client.get("/health")
+
+        assert response.status_code == 200
+        assert site_metrics_job is not None
+        assert site_metrics_job.trigger is not None
+        assert site_metrics_job.trigger.interval.total_seconds() == 60
+
+        registered = [entry for entry in captured if entry["event"] == "collector_registered"]
+        sm_registered = [entry for entry in registered if entry["source"] == "site-metrics"]
+        assert sm_registered[0]["sites"] == 1
+        started = [entry for entry in captured if entry["event"] == "app_started"]
+        assert "site-metrics" in started[0]["collectors"]
+        # Секрет не должен попадать в логи.
+        assert all("sm-secret-key" not in str(entry) for entry in captured)
+
+
+def test_lifespan_warns_when_site_metrics_key_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_file = tmp_path / "sites.yml"
+    config_file.write_text(
+        "sites:\n"
+        "  - domain: sm-test.com\n"
+        "    metrics_urls:\n"
+        "      tracking: https://sm-test.com/metrics/tracking\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SITES_CONFIG_PATH", str(config_file))
+    # Пустая env-переменная перекрывает значение из .env (env > env_file)
+    monkeypatch.setenv("SITE_METRICS_API_KEY", "")
+    monkeypatch.setattr(main_module, "setup_logging", lambda *a, **k: None)
+    get_settings.cache_clear()
+
+    with capture_logs() as captured:
+        with TestClient(app) as client:
+            response = client.get("/health")
+
+        assert response.status_code == 200
+        warnings = [entry for entry in captured if entry["event"] == "site_metrics_api_key_empty"]
+        assert warnings
+
+
 def test_lifespan_invalid_sites_config_fails_startup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -15,17 +15,21 @@
 │  │  ├── /metrics       — prometheus_client       │          │
 │  │  ├── /api/v1/sites  — список сайтов           │          │
 │  │  ├── /api/v1/sd/node-exporter — HTTP SD [ЭПИК-6]
+│  │  ├── /api/v1/sd/site-metrics/{kind} — HTTP SD [ЭПИК-9]
 │  │  └── APScheduler    — расписание коллекторов  │          │
 │  │       ├── collectors/uptime.py    [ЭПИК-1]    │──▶ HTTP/SSL сайтов
 │  │       ├── collectors/metrika.py   [ЭПИК-2]    │──▶ Яндекс.Метрика API
 │  │       ├── collectors/webmaster.py [ЭПИК-5]    │──▶ Яндекс.Вебмастер API
+│  │       ├── collectors/sitemetrics.py [ЭПИК-9]  │──▶ health эндпоинтов метрик
 │  └──────────────────────┬────────────────────────┘          │
 │                         │ /metrics (pull, 15s)              │
 │  ┌──────────────────────▼────────────────────────┐          │
 │  │ Prometheus (127.0.0.1:9091)                   │          │
 │  │   ├── http_sd: /api/v1/sd/node-exporter [ЭПИК-6]
+│  │   ├── http_sd: /api/v1/sd/site-metrics/{kind} + X-Monitoring-Key [ЭПИК-9]
 │  │   ├── rules: /etc/prometheus/alerts.yml [ЭПИК-7]
 │  │   └──▶ node_exporter целей (лейбл site из SD) [ЭПИК-6]
+│  │   └──▶ jobs site-*: метрики сайтов (443, ключ) [ЭПИК-9]
 │  │   │ firing alerts [ЭПИК-7]                    │          │
 │  └───┼──────────────────┬────────────────────────┘          │
 │      ▼                  │ datasource                        │
@@ -64,22 +68,25 @@ monitoring/
 │   └── api/v1/
 │       ├── health.py        # GET /health
 │       ├── sites.py         # GET /api/v1/sites
-│       └── sd.py            # GET /api/v1/sd/node-exporter — HTTP SD [ЭПИК-6]
+│       └── sd.py            # GET /api/v1/sd/node-exporter [ЭПИК-6], /sd/site-metrics/{kind} [ЭПИК-9]
 ├── collectors/
 │   ├── base.py              # BaseCollector: метрики, логи, ретраи, расписание, parallel
 │   ├── uptime.py            # UptimeCollector (HTTP) + SSLCollector (сертификаты) [ЭПИК-1]
 │   ├── metrika.py           # MetrikaCollector (визиты/посетители) [ЭПИК-2]
-│   └── webmaster.py         # WebmasterCollector (поисковые запросы) [ЭПИК-5]
+│   ├── webmaster.py         # WebmasterCollector (поисковые запросы) [ЭПИК-5]
+│   └── sitemetrics.py       # SiteMetricsCollector: health эндпоинтов метрик [ЭПИК-9]
 ├── config/
-│   └── sites.yml            # сайты: domain + опц. counter_id / host_id / exporter
+│   └── sites.yml            # сайты: domain + опц. counter_id / host_id / exporter / metrics_urls
 ├── grafana/
 │   ├── dashboards/          # JSON-дашборды [ЭПИК-3]:
 │   │   ├── site-overview.json  # «Обзор сайта» (переменная site, 8 панелей)
-│   │   └── all-sites.json      # «Все сайты» (таблица статусов + спарклайны)
+│   │   ├── all-sites.json      # «Все сайты» (таблица статусов + спарклайны)
+│   │   └── site-business.json  # «Бизнес сайта» (14 панелей, ЭПИК-9)
 │   └── provisioning/        # datasources (uid: prometheus) + dashboards
 ├── prometheus/
-│   ├── prometheus.yml       # scrape + rule_files + alerting→alertmanager [ЭПИК-7]
-│   ├── alerts.yml           # правила алертов [ЭПИК-7, ADR-006]
+│   ├── prometheus.yml       # scrape (app, node-exporter SD, site-* SD) + rules + alerting
+│   ├── prometheus-entrypoint.sh # подстановка SITE_METRICS_API_KEY в конфиг [ЭПИК-9]
+│   ├── alerts.yml           # правила алертов [ЭПИК-7, ADR-006; ЭПИК-9]
 │   ├── alertmanager.yml     # конфиг Alertmanager (шаблон с подстановкой) [ЭПИК-7]
 │   └── alertmanager-entrypoint.sh
 ├── scripts/
@@ -139,6 +146,24 @@ monitoring/
   `monitoring_collector_*` для серверных метрик не заводятся
 - В дашбордах `rate()` разрешён ТОЛЬКО для `node_*` (counter);
   метрики проекта `monitoring_*` — gauge, без rate()/increase()
+
+### Метрики сайтов за X-Monitoring-Key (ЭПИК-9, ADR-007)
+- Сайты отдают метрики через свой nginx (443) по путям
+  `/metrics/{tracking,content,node,postgres}` с заголовком
+  `X-Monitoring-Key`; конфиг сайта — поле `metrics_urls` в sites.yml
+  (только https, kinds из whitelist)
+- Скрейп: Prometheus jobs `site-{kind}` через HTTP SD
+  `GET /api/v1/sd/site-metrics/{kind}` (лейбл `site` из SD);
+  ключ — env `SITE_METRICS_API_KEY` (.env), подставляется
+  `prometheus-entrypoint.sh` (плейсхолдер `__SITE_METRICS_API_KEY__`);
+  пустой ключ → заглушка NOT_CONFIGURED → скрейпы 403 → up=0
+- Health-контроль эндпоинтов: `SiteMetricsCollector` (source=`site-metrics`,
+  gauge `monitoring_site_metrics_up/response_code/latency_seconds`
+  `{site,kind}`); философия ADR-002: 403/404/5xx/сеть — данные (up=0),
+  не ошибка коллектора; цикл 60 с — сам ретрай
+- Бизнес-метрики сайта (`business_*`) — gauge, считаются на стороне сайта
+  из БД (окна 24ч/1ч), пересчёт раз в 60 с; алерт SiteNoTraffic —
+  только `== 0` и `offset`-сравнения, без rate()
 
 ### Алерты (ЭПИК-7, ADR-006)
 - Правила — `prometheus/alerts.yml` (rules-as-code): SiteDown (3m, critical),

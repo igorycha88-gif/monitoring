@@ -146,4 +146,78 @@ def test_site_config_is_public_model() -> None:
         "metrika_counter_id": None,
         "webmaster_host_id": None,
         "node_exporter_url": None,
+        "metrics_urls": None,
     }
+
+
+VALID_METRICS_URLS = """
+sites:
+  - domain: example.com
+    metrics_urls:
+      tracking: https://example.com/metrics/tracking
+      content: https://example.com/metrics/content
+      node: https://example.com/metrics/node
+      postgres: https://example.com/metrics/postgres
+"""
+
+
+def test_metrics_urls_valid_accepted(tmp_path: Path) -> None:
+    sites = load_sites(write_config(tmp_path, VALID_METRICS_URLS))
+    assert sites[0].metrics_urls is not None
+    assert set(sites[0].metrics_urls) == {"tracking", "content", "node", "postgres"}
+    assert sites[0].metrics_urls["tracking"] == "https://example.com/metrics/tracking"
+
+
+def test_metrics_urls_partial_set_allowed(tmp_path: Path) -> None:
+    sites = load_sites(
+        write_config(
+            tmp_path,
+            "sites:\n  - domain: a.com\n    metrics_urls:\n      tracking: https://a.com/metrics/tracking\n",
+        )
+    )
+    assert sites[0].metrics_urls == {"tracking": "https://a.com/metrics/tracking"}
+
+
+def test_metrics_urls_unknown_kind_rejected(tmp_path: Path) -> None:
+    with pytest.raises(SiteConfigError, match="неизвестные kinds"):
+        load_sites(
+            write_config(
+                tmp_path,
+                "sites:\n  - domain: a.com\n    metrics_urls:\n      billing: https://a.com/metrics/billing\n",
+            )
+        )
+
+
+def test_metrics_urls_http_rejected(tmp_path: Path) -> None:
+    with pytest.raises(SiteConfigError, match="https://"):
+        load_sites(
+            write_config(
+                tmp_path,
+                "sites:\n  - domain: a.com\n    metrics_urls:\n      tracking: http://a.com/metrics/tracking\n",
+            )
+        )
+
+
+def test_metrics_urls_query_rejected(tmp_path: Path) -> None:
+    with pytest.raises(SiteConfigError, match="query"):
+        load_sites(
+            write_config(
+                tmp_path,
+                'sites:\n  - domain: a.com\n    metrics_urls:\n      node: "https://a.com/metrics/node?x=1"\n',
+            )
+        )
+
+
+def test_metrics_urls_no_path_rejected(tmp_path: Path) -> None:
+    with pytest.raises(SiteConfigError, match="путь"):
+        load_sites(
+            write_config(
+                tmp_path,
+                'sites:\n  - domain: a.com\n    metrics_urls:\n      node: "https://a.com"\n',
+            )
+        )
+
+
+def test_metrics_urls_empty_dict_rejected(tmp_path: Path) -> None:
+    with pytest.raises(SiteConfigError, match="пустым"):
+        load_sites(write_config(tmp_path, "sites:\n  - domain: a.com\n    metrics_urls: {}\n"))

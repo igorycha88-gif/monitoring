@@ -14,9 +14,7 @@ class SiteConfigError(Exception):
 
 
 # ЭПИК-9 (ADR-007): допустимые kinds эндпоинтов метрик сайта
-SITE_METRICS_KINDS: frozenset[str] = frozenset(
-    {"tracking", "content", "node", "postgres"}
-)
+SITE_METRICS_KINDS: frozenset[str] = frozenset({"tracking", "content", "node", "postgres"})
 
 
 class SiteConfig(BaseModel):
@@ -72,7 +70,6 @@ class SiteConfig(BaseModel):
             raise ValueError(f"некорректный порт в node_exporter_url: {exc}") from exc
         return url
 
-
     @field_validator("metrics_urls")
     @classmethod
     def validate_metrics_urls(cls, value: dict[str, str] | None) -> dict[str, str] | None:
@@ -98,7 +95,9 @@ class SiteConfig(BaseModel):
                     f"metrics_urls.{kind} не должен содержать query (?) или fragment (#)"
                 )
             if not parsed.path or parsed.path == "/":
-                raise ValueError(f"metrics_urls.{kind} должен содержать путь (например /metrics/{kind})")
+                raise ValueError(
+                    f"metrics_urls.{kind} должен содержать путь (например /metrics/{kind})"
+                )
         return value
 
 
