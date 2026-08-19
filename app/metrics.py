@@ -110,3 +110,10 @@ SITE_METRICS_LATENCY_SECONDS = Gauge(
     "Время ответа эндпоинта метрик сайта, в секундах (ADR-007)",
     ["site", "kind"],
 )
+
+STORAGE_ERRORS_TOTAL = Counter(
+    "monitoring_storage_errors_total",
+    "Ошибки записи в долговременное хранилище (SQLite, ADR-009); "
+    "сбор метрик Prometheus при этом продолжается",
+    ["source"],
+)

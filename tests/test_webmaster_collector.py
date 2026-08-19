@@ -10,6 +10,7 @@ from prometheus_client import generate_latest
 from structlog.testing import capture_logs
 
 from app.sites import SiteConfig
+from app.storage import DailyRow, WeeklyRow
 from collectors.webmaster import (
     QUERY_LABEL_MAX_LENGTH,
     WEBMASTER_API_BASE,
@@ -959,3 +960,117 @@ def test_normalize_query_unit() -> None:
     assert normalize_query("\tраз\tдва \n") == "раз два"
     assert len(normalize_query("x" * 300)) == QUERY_LABEL_MAX_LENGTH
     assert normalize_query("   ") == ""
+
+
+class FakeStorage:
+    """Подмена WebmasterStorage: запись вызовов; save_daily может падать."""
+
+    def __init__(self, daily_error: Exception | None = None) -> None:
+        self.weekly_calls: list[tuple[str, list[WeeklyRow], str]] = []
+        self.daily_calls: list[tuple[str, list[DailyRow], str]] = []
+        self.daily_error = daily_error
+
+    def save_weekly(self, site: str, rows: list[WeeklyRow], fetched_at: str) -> int:
+        self.weekly_calls.append((site, list(rows), fetched_at))
+        return len(rows)
+
+    def save_daily(self, site: str, rows: list[DailyRow], fetched_at: str) -> int:
+        if self.daily_error is not None:
+            raise self.daily_error
+        self.daily_calls.append((site, list(rows), fetched_at))
+        return len(rows)
+
+
+def make_storage_collector(storage: FakeStorage, domain: str) -> WebmasterCollector:
+    sites = [SiteConfig(domain=domain, webmaster_host_id=HOST_ID)]
+    collector = WebmasterCollector(
+        sites,
+        oauth_token="test-token",
+        timeout_seconds=1.0,
+        storage=storage,  # type: ignore[arg-type]
+    )
+    collector.retry_base_delay = 0
+    return collector
+
+
+@respx.mock
+async def test_collect_writes_storage_weekly_and_daily() -> None:
+    """ADR-009: оба среза пишутся в БД с привязкой к сайту (domain)."""
+    mock_user()
+    respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
+    respx.get(path__regex=HISTORY_ROUTE_RE).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "query_id": "a1",
+                "indicators": {
+                    "TOTAL_CLICKS": [{"date": yandex_iso(1), "value": 4}],
+                    "TOTAL_SHOWS": [{"date": yandex_iso(1), "value": 40}],
+                },
+            },
+        )
+    )
+    storage = FakeStorage()
+    collector = make_storage_collector(storage, domain="db-site.com")
+
+    result = await collector.run_once()
+
+    assert result["sites_ok"] == 1
+    # Недельный снапшот: сайт + строка на каждый запрос топа
+    assert len(storage.weekly_calls) == 1
+    site, weekly_rows, fetched_at = storage.weekly_calls[0]
+    assert site == "db-site.com"
+    assert len(weekly_rows) == 1
+    assert weekly_rows[0].query_id == "a1"
+    assert weekly_rows[0].clicks == 50.0
+    assert fetched_at  # ISO-метка времени прогона
+    # Дневная история: новейшая завершённая точка с датой дня Яндекса
+    assert len(storage.daily_calls) == 1
+    site, daily_rows, _ = storage.daily_calls[0]
+    assert site == "db-site.com"
+    assert len(daily_rows) == 1
+    expected_day = (datetime.now(tz=YANDEX_TZ).date() - timedelta(days=1)).isoformat()
+    assert daily_rows[0].date == expected_day
+    assert daily_rows[0].clicks == 4.0
+    assert daily_rows[0].shows == 40.0
+
+
+@respx.mock
+async def test_storage_error_does_not_fail_collection() -> None:
+    """ADR-009 D4: ошибка записи в БД не роняет сбор метрик Prometheus."""
+    mock_user()
+    respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
+    mock_history(
+        shows=[{"date": yandex_iso(1), "value": 40}],
+        clicks=[{"date": yandex_iso(1), "value": 4}],
+    )
+    storage = FakeStorage(daily_error=RuntimeError("disk full"))
+    collector = make_storage_collector(storage, domain="db-fail.com")
+
+    with capture_logs() as captured:
+        result = await collector.run_once()
+
+    assert result["sites_ok"] == 1  # сбор прошёл
+    metrics = generate_latest().decode()
+    assert 'monitoring_search_clicks_total{query="купить слона",site="db-fail.com"} 50.0' in metrics
+    assert 'monitoring_collector_success{site="db-fail.com",source="webmaster"} 1.0' in metrics
+    # Счётчик ошибок хранилища доступен на /metrics
+    assert 'monitoring_storage_errors_total{source="webmaster"}' in metrics
+    failures = [entry for entry in captured if entry["event"] == "webmaster_db_write_failed"]
+    assert failures and failures[0]["operation"] == "save_daily"
+
+
+@respx.mock
+async def test_history_without_complete_points_skips_daily_storage() -> None:
+    """Нет завершённых точек — в БД дневная запись не пишется (не пишем пустышку)."""
+    mock_user()
+    respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
+    mock_history()  # индикаторы без точек
+    storage = FakeStorage()
+    collector = make_storage_collector(storage, domain="db-empty.com")
+
+    result = await collector.run_once()
+
+    assert result["sites_ok"] == 1
+    assert len(storage.weekly_calls) == 1  # недельный срез пишется
+    assert storage.daily_calls == []  # дневной — нет

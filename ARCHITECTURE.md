@@ -65,6 +65,7 @@ monitoring/
 │   ├── logging.py           # structlog (JSON по умолчанию)
 │   ├── sites.py             # загрузка/валидация config/sites.yml
 │   ├── metrics.py           # реестр метрик monitoring_*
+│   ├── storage.py           # WebmasterStorage: SQLite (WAL) данных Вебмастера [ADR-009]
 │   └── api/v1/
 │       ├── health.py        # GET /health
 │       ├── sites.py         # GET /api/v1/sites
@@ -82,8 +83,7 @@ monitoring/
 │   │   ├── site-overview.json  # «Обзор сайта» (переменная site, 8 панелей)
 │   │   ├── all-sites.json      # «Все сайты» (таблица статусов + спарклайны)
 │   │   ├── site-business.json  # «Бизнес сайта» (14 панелей, ЭПИК-9)
-│   │   ├── webmaster-dynamics.json   # «Поиск: динамика показов/кликов по дням» [ADR-008]
-│   │   └── webmaster-top-queries.json # «Поиск: топ запросов» (срезы 7d/30d/365d) [ADR-008]
+│   │   └── webmaster.json      # «Вебмастер: поиск по сайту» — единая страница (5 панелей: динамика + топы) [ADR-008, ЧТЗ_Дашборд_Вебмастер_Единый]
 │   └── provisioning/        # datasources (uid: prometheus) + dashboards
 ├── prometheus/
 │   ├── prometheus.yml       # scrape (app, node-exporter SD, site-* SD) + rules + alerting

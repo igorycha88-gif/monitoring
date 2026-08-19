@@ -1,5 +1,6 @@
-"""Коллектор Яндекс.Вебмастера: топ запросов за неделю + дневная история (ЭПИК-5, ADR-004/008)."""
+"""Коллектор Яндекс.Вебмастера: топ запросов + дневная история (ЭПИК-5, ADR-004/008/009)."""
 
+import asyncio
 import re
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
@@ -14,8 +15,10 @@ from app.metrics import (
     SEARCH_DAILY_SHOWS,
     SEARCH_POSITION,
     SEARCH_SHOWS_TOTAL,
+    STORAGE_ERRORS_TOTAL,
 )
 from app.sites import SiteConfig
+from app.storage import DailyRow, WebmasterStorage, WeeklyRow
 from collectors.base import BaseCollector, RateLimitError
 from collectors.metrika import parse_retry_after
 
@@ -110,6 +113,7 @@ class WebmasterCollector(BaseCollector):
         top_queries: int = 50,
         api_base: str = WEBMASTER_API_BASE,
         history_days: int = 7,
+        storage: WebmasterStorage | None = None,
     ) -> None:
         super().__init__(sites)
         all_sites = self.sites
@@ -121,6 +125,7 @@ class WebmasterCollector(BaseCollector):
         self.api_base = api_base.rstrip("/")
         self.user_url = f"{self.api_base}/user"
         self.history_days = max(1, min(history_days, HISTORY_DAYS_LIMIT))
+        self.storage = storage
         self._user_id: int | None = None
         self.logger.info(
             "webmaster_collector_init",
@@ -128,6 +133,7 @@ class WebmasterCollector(BaseCollector):
             skipped_sites=self.skipped_sites,
             top_queries=self.top_queries,
             history_days=self.history_days,
+            storage_enabled=storage is not None,
         )
 
     async def collect_site(self, site: SiteConfig) -> int:
@@ -150,6 +156,7 @@ class WebmasterCollector(BaseCollector):
         points = 0
         for row in rows:
             points += self._write_row(site.domain, row)
+        await self._save_weekly_safe(site.domain, rows)
         points += await self._write_daily_history(user_id, host_id, site.domain, rows)
         self.logger.info(
             "webmaster_collect_done",
@@ -275,6 +282,52 @@ class WebmasterCollector(BaseCollector):
             )
         return rows
 
+    async def _save_weekly_safe(self, domain: str, rows: list[QueryStats]) -> None:
+        """Недельный снапшот в БД; ошибка записи не роняет сбор (ADR-009 D4)."""
+        storage = self.storage
+        if storage is None or not rows:
+            return
+        fetched_at = datetime.now(tz=UTC).isoformat()
+        weekly = [
+            WeeklyRow(
+                query_id=row.query_id,
+                query=row.query,
+                shows=row.shows,
+                clicks=row.clicks,
+                position=row.position,
+            )
+            for row in rows
+        ]
+        try:
+            await asyncio.to_thread(storage.save_weekly, domain, weekly, fetched_at)
+        except Exception as exc:
+            STORAGE_ERRORS_TOTAL.labels(source=self.source).inc()
+            self.logger.error(
+                "webmaster_db_write_failed",
+                operation="save_weekly",
+                site=domain,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+
+    async def _save_daily_safe(self, domain: str, rows: list[DailyRow]) -> None:
+        """Дневные точки в БД; ошибка записи не роняет сбор (ADR-009 D4)."""
+        storage = self.storage
+        if storage is None or not rows:
+            return
+        fetched_at = datetime.now(tz=UTC).isoformat()
+        try:
+            await asyncio.to_thread(storage.save_daily, domain, rows, fetched_at)
+        except Exception as exc:
+            STORAGE_ERRORS_TOTAL.labels(source=self.source).inc()
+            self.logger.error(
+                "webmaster_db_write_failed",
+                operation="save_daily",
+                site=domain,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+
     async def _write_daily_history(
         self, user_id: int, host_id: str, domain: str, rows: list[QueryStats]
     ) -> int:
@@ -287,6 +340,7 @@ class WebmasterCollector(BaseCollector):
         ошибка сайта; остальные ошибки после ретраев — ошибка сайта.
         """
         points = 0
+        daily_rows: list[DailyRow] = []
         for row in rows:
             try:
                 history = await self._fetch_history_with_retry(user_id, host_id, row.query_id)
@@ -303,6 +357,10 @@ class WebmasterCollector(BaseCollector):
                 )
                 continue
             points += self._write_daily_row(domain, row.query, history)
+            daily_row = self._to_daily_row(row, history)
+            if daily_row is not None:
+                daily_rows.append(daily_row)
+        await self._save_daily_safe(domain, daily_rows)
         self.logger.info(
             "webmaster_history_done",
             site=domain,
@@ -319,6 +377,25 @@ class WebmasterCollector(BaseCollector):
         return await self.retry(
             lambda: self._fetch_query_history(user_id, host_id, query_id),
             retry_on=WEBMASTER_RETRYABLE,
+        )
+
+    def _to_daily_row(self, row: QueryStats, history: dict[str, DailyValue]) -> DailyRow | None:
+        """DailyRow из истории запроса; None — завершённых точек нет (не пишем)."""
+        clicks = history.get("TOTAL_CLICKS")
+        shows = history.get("TOTAL_SHOWS")
+        if clicks is None and shows is None:
+            return None
+        raw_date = clicks.date if clicks is not None else shows.date if shows is not None else ""
+        try:
+            day = datetime.fromisoformat(raw_date).date().isoformat()
+        except ValueError:
+            day = raw_date[:10]
+        return DailyRow(
+            query_id=row.query_id,
+            query=row.query,
+            date=day,
+            clicks=None if clicks is None else clicks.value,
+            shows=None if shows is None else shows.value,
         )
 
     def _write_daily_row(self, domain: str, query: str, history: dict[str, DailyValue]) -> int:

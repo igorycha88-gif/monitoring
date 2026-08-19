@@ -6,10 +6,14 @@ services:
     container_name: monitoring-app
     restart: unless-stopped
     env_file: .env
+    # ADR-009: долговременное хранение данных Вебмастера (SQLite в volume)
+    environment:
+      WEBMASTER_DB_PATH: ${WEBMASTER_DB_PATH:-/var/lib/monitoring/webmaster.db}
     ports:
       - "127.0.0.1:8088:8088"
     volumes:
       - ./config:/srv/config:ro
+      - monitoring-db:/var/lib/monitoring
     networks:
       - monitoring-net
 
@@ -97,3 +101,4 @@ volumes:
   prometheus-data:
   alertmanager-data:
   grafana-data:
+  monitoring-db:

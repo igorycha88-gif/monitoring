@@ -12,3 +12,5 @@ htmlcov/
 dist/
 build/
 .DS_Store
+# Локальная SQLite-БД Вебмастера (ADR-009); в docker — volume monitoring-db
+data/

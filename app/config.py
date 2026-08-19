@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     webmaster_top_queries: int = 50
     # Окно запроса дневной истории поиска (ADR-008): запас на лаг обновления данных Яндекса
     webmaster_history_days: int = 7
+    # Долговременное хранение данных Вебмастера в SQLite (ADR-009);
+    # пустая строка — хранение отключено
+    webmaster_db_path: str = "data/webmaster.db"
 
     yandex_metrika_oauth_token: str = ""
     yandex_webmaster_oauth_token: str = ""

@@ -12,6 +12,7 @@ from app.api.v1 import health, sd, sites
 from app.config import get_settings
 from app.logging import get_logger, setup_logging
 from app.sites import SiteConfig, load_sites
+from app.storage import WebmasterStorage
 from collectors.metrika import MetrikaCollector
 from collectors.sitemetrics import SiteMetricsCollector
 from collectors.uptime import SSLCollector, UptimeCollector
@@ -27,6 +28,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     setup_logging(settings.log_level, settings.log_format)
     sites_list = load_sites(settings.sites_config_path)
     scheduler = AsyncIOScheduler(timezone="UTC")
+    webmaster_storage: WebmasterStorage | None = None
     uptime_collector = UptimeCollector(
         sites_list,
         timeout_seconds=settings.uptime_timeout_seconds,
@@ -48,12 +50,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     else:
         logger.info("metrika_collector_skipped", reason="no_counters")
     if _sites_with_webmaster(sites_list):
+        if settings.webmaster_db_path:
+            webmaster_storage = WebmasterStorage(settings.webmaster_db_path)
+            try:
+                webmaster_storage.init()
+            except Exception as exc:
+                # БД — долговременное сырьё, не основной канал: отказ хранения
+                # не должен ронять мониторинг (ADR-009 D4)
+                logger.error(
+                    "storage_init_failed",
+                    path=settings.webmaster_db_path,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                webmaster_storage = None
+        else:
+            logger.info("storage_disabled", reason="empty_webmaster_db_path")
         webmaster_collector = WebmasterCollector(
             sites_list,
             oauth_token=settings.yandex_webmaster_oauth_token,
             timeout_seconds=settings.webmaster_timeout_seconds,
             top_queries=settings.webmaster_top_queries,
             history_days=settings.webmaster_history_days,
+            storage=webmaster_storage,
         )
         webmaster_collector.register_daily(
             scheduler,
@@ -90,6 +109,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         scheduler.shutdown(wait=False)
+        if webmaster_storage is not None:
+            webmaster_storage.close()
         logger.info("app_stopped")
 
 

@@ -15,8 +15,7 @@ DASHBOARD_NAMES = (
     "site-overview.json",
     "all-sites.json",
     "site-business.json",
-    "webmaster-dynamics.json",
-    "webmaster-top-queries.json",
+    "webmaster.json",
 )
 
 # Белый список собираем из реестра приложения (app/metrics.py),
@@ -122,7 +121,7 @@ def test_panels_use_provisioned_prometheus_datasource() -> None:
 
 def test_site_overview_structure() -> None:
     dashboard = load_dashboard("site-overview.json")
-    assert len(dashboard["panels"]) == 18
+    assert len(dashboard["panels"]) == 12
     titles = {panel["title"] for panel in dashboard["panels"]}
     assert titles == {
         "Доступность",
@@ -137,12 +136,6 @@ def test_site_overview_structure() -> None:
         "RAM, %",
         "Диск /, %",
         "Load average (1m)",
-        "Поиск (Яндекс.Вебмастер, за последнюю неделю)",
-        "Клики за неделю",
-        "Показы за неделю",
-        "Топ-15 поисковых запросов по кликам",
-        "Позиция в поиске (меньше — лучше)",
-        "",
     }
     var = dashboard["templating"]["list"][0]
     assert var["name"] == "site"
@@ -150,6 +143,12 @@ def test_site_overview_structure() -> None:
     assert var["multi"] is False
     assert var["includeAll"] is False
     assert "label_values" in str(var["query"]["query"])
+
+
+def test_site_overview_no_webmaster_panels() -> None:
+    """Секция Вебмастера перенесена в единый дашборд (ЧТЗ_Перенос_Вебмастер_из_Обзора)."""
+    for expr in panel_exprs(load_dashboard("site-overview.json")):
+        assert "monitoring_search" not in expr, expr
 
 
 def test_site_overview_server_panels() -> None:
@@ -164,33 +163,6 @@ def test_site_overview_server_panels() -> None:
     assert "node_filesystem_avail_bytes" in disk and "node_filesystem_size_bytes" in disk
     load_avg = by_title["Load average (1m)"]["targets"][0]["expr"]
     assert load_avg == 'node_load1{site="$site"}'
-
-
-def test_site_overview_webmaster_panels() -> None:
-    """Панели Вебмастера: instant-запросы, фильтр по сайту, gauge без rate()."""
-    dashboard = load_dashboard("site-overview.json")
-    by_title = {panel["title"]: panel for panel in dashboard["panels"]}
-    clicks = by_title["Клики за неделю"]["targets"][0]["expr"]
-    assert clicks == 'sum(monitoring_search_clicks_total{site="$site"})'
-    shows = by_title["Показы за неделю"]["targets"][0]["expr"]
-    assert shows == 'sum(monitoring_search_shows_total{site="$site"})'
-    table = by_title["Топ-15 поисковых запросов по кликам"]
-    table_target = table["targets"][0]
-    assert table_target["format"] == "table"
-    assert table_target["instant"] is True
-    assert table_target["expr"] == 'topk(15, monitoring_search_clicks_total{site="$site"})'
-    renames = table["transformations"][0]["options"]["renameByName"]
-    assert renames == {"query": "Запрос", "Value": "Клики"}
-    position = by_title["Позиция в поиске (меньше — лучше)"]
-    position_exprs = {target["expr"] for target in position["targets"]}
-    assert position_exprs == {
-        'avg(monitoring_search_position{site="$site"})',
-        'min(monitoring_search_position{site="$site"})',
-    }
-    # Одна точка данных должна быть видна: showPoints != never (иначе линия
-    # из единственной точки не отрисовывается — панель выглядит пустой).
-    position_custom = position["fieldConfig"]["defaults"]["custom"]
-    assert position_custom["showPoints"] in ("auto", "always")
 
 
 def test_all_sites_structure() -> None:
@@ -265,15 +237,35 @@ def test_site_business_panels_use_business_and_site_metrics() -> None:
     assert "monitoring_site_metrics_latency_seconds" in joined
 
 
-def test_webmaster_dynamics_structure() -> None:
-    """ADR-008: дашборд дневной динамики — 2 timeseries-панели, переменная site."""
-    dashboard = load_dashboard("webmaster-dynamics.json")
-    assert dashboard["uid"] == "webmaster-dynamics"
-    assert len(dashboard["panels"]) == 2
+def test_webmaster_unified_structure() -> None:
+    """Единый дашборд Вебмастера: все панели на одной странице.
+
+    Динамика (ADR-008): сайт = сумма по отслеживаемым запросам (per-query
+    history). Топы: instant-таблицы с range-функцией avg_over_time[$period].
+    Секция «за последнюю неделю» перенесена из «Обзора сайта»
+    (ЧТЗ_Перенос_Вебмастер_из_Обзора).
+    """
+    dashboard = load_dashboard("webmaster.json")
+    assert dashboard["uid"] == "webmaster"
+    assert len(dashboard["panels"]) == 11
     by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+    assert set(by_title) == {
+        "Показы по дням",
+        "Клики по дням",
+        "Топ-5 запросов по позиции (лучшие)",
+        "Топ-5 запросов по кликам",
+        "Топ-5 запросов по показам",
+        "Поиск (Яндекс.Вебмастер, за последнюю неделю)",
+        "Клики за неделю",
+        "Показы за неделю",
+        "",
+        "Топ-15 поисковых запросов по кликам",
+        "Позиция в поиске (меньше — лучше)",
+    }
+
+    # Динамика: timeseries, сайт = сумма по отслеживаемым запросам (ADR-008)
     assert by_title["Показы по дням"]["type"] == "timeseries"
     assert by_title["Клики по дням"]["type"] == "timeseries"
-    # Сайт = сумма по отслеживаемым запросам (per-query history, ADR-008)
     assert (
         by_title["Показы по дням"]["targets"][0]["expr"]
         == 'sum(monitoring_search_daily_shows{site="$site"})'
@@ -282,27 +274,15 @@ def test_webmaster_dynamics_structure() -> None:
         by_title["Клики по дням"]["targets"][0]["expr"]
         == 'sum(monitoring_search_daily_clicks{site="$site"})'
     )
-    var = dashboard["templating"]["list"][0]
-    assert var["name"] == "site"
-    assert var["multi"] is False
-    assert var["includeAll"] is False
-    assert "label_values(monitoring_search_daily_shows, site)" in str(var["query"]["query"])
 
-
-def test_webmaster_top_queries_structure() -> None:
-    """ADR-008: дашборд топов — 3 instant-таблицы, переменные site + period."""
-    dashboard = load_dashboard("webmaster-top-queries.json")
-    assert dashboard["uid"] == "webmaster-top-queries"
-    assert len(dashboard["panels"]) == 3
-    by_title = {panel["title"]: panel for panel in dashboard["panels"]}
-    assert set(by_title) == {
+    # Топы: instant-таблицы с [$period]
+    for title in (
         "Топ-5 запросов по позиции (лучшие)",
         "Топ-5 запросов по кликам",
         "Топ-5 запросов по показам",
-    }
-    for title, panel in by_title.items():
-        assert panel["type"] == "table", title
-        target = panel["targets"][0]
+    ):
+        assert by_title[title]["type"] == "table", title
+        target = by_title[title]["targets"][0]
         assert target["format"] == "table", title
         assert target["instant"] is True, title
         assert "[$period]" in target["expr"], title
@@ -322,9 +302,45 @@ def test_webmaster_top_queries_structure() -> None:
     renames = by_title["Топ-5 запросов по кликам"]["transformations"][0]["options"]["renameByName"]
     assert renames == {"query": "Запрос", "Value": "Клики/нед (среднее за период)"}
 
+    # Секция «за последнюю неделю» (перенос из «Обзора сайта»)
+    row = by_title["Поиск (Яндекс.Вебмастер, за последнюю неделю)"]
+    assert row["type"] == "row"
+    stats = by_title["Клики за неделю"]
+    assert stats["type"] == "stat"
+    assert stats["targets"][0]["expr"] == 'sum(monitoring_search_clicks_total{site="$site"})'
+    assert stats["targets"][0]["instant"] is True
+    assert by_title["Показы за неделю"]["targets"][0]["expr"] == (
+        'sum(monitoring_search_shows_total{site="$site"})'
+    )
+    text = by_title[""]
+    assert text["type"] == "text"
+    assert "Яндекс.Вебмастера" in text["options"]["content"]
+    top15 = by_title["Топ-15 поисковых запросов по кликам"]
+    assert top15["type"] == "table"
+    top15_target = top15["targets"][0]
+    assert top15_target["format"] == "table"
+    assert top15_target["instant"] is True
+    assert top15_target["expr"] == 'topk(15, monitoring_search_clicks_total{site="$site"})'
+    assert top15["transformations"][0]["options"]["renameByName"] == {
+        "query": "Запрос",
+        "Value": "Клики",
+    }
+    position_panel = by_title["Позиция в поиске (меньше — лучше)"]
+    assert position_panel["type"] == "timeseries"
+    assert {target["expr"] for target in position_panel["targets"]} == {
+        'avg(monitoring_search_position{site="$site"})',
+        'min(monitoring_search_position{site="$site"})',
+    }
+    # Одна точка данных должна быть видна: showPoints != never
+    position_custom = position_panel["fieldConfig"]["defaults"]["custom"]
+    assert position_custom["showPoints"] in ("auto", "always")
+
+    # Единый переключатель сайта для всех панелей
     variables = {var["name"]: var for var in dashboard["templating"]["list"]}
-    assert variables["site"]["multi"] is False
-    assert "label_values(monitoring_search_clicks_total, site)" in str(variables["site"]["query"])
+    site = variables["site"]
+    assert site["multi"] is False
+    assert site["includeAll"] is False
+    assert "label_values(monitoring_search_clicks_total, site)" in str(site["query"])
     period = variables["period"]
     assert period["type"] == "custom"
     assert [(option["text"], option["value"]) for option in period["options"]] == [
@@ -334,3 +350,12 @@ def test_webmaster_top_queries_structure() -> None:
     ]
     # Пометка о приближённости срезов месяц/год (ADR-008 D3)
     assert "приближение" in dashboard["description"]
+
+
+def test_webmaster_old_dashboards_removed() -> None:
+    """Старые дашборды Вебмастера удалены — единая страница вместо двух."""
+    remaining = {
+        "webmaster-dynamics.json",
+        "webmaster-top-queries.json",
+    } & {path.name for path in DASHBOARDS_DIR.glob("*.json")}
+    assert not remaining, f"устаревшие дашборды не удалены: {remaining}"
