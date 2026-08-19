@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from apscheduler.triggers.cron import CronTrigger
 from fastapi.testclient import TestClient
 from structlog.testing import capture_logs
 
@@ -104,10 +105,13 @@ def test_lifespan_registers_webmaster_collector(
 
         assert response.status_code == 200
         assert webmaster_job is not None
-        assert webmaster_job.trigger is not None
-        assert webmaster_job.trigger.interval.total_seconds() == 3600
+        assert isinstance(webmaster_job.trigger, CronTrigger)
+        fields = {field.name: str(field) for field in webmaster_job.trigger.fields}
+        assert fields["hour"] == "7,19"
+        assert fields["minute"] == "0"
+        assert str(webmaster_job.trigger.timezone) == "Europe/Moscow"
 
-        registered = [entry for entry in captured if entry["event"] == "collector_registered"]
+        registered = [entry for entry in captured if entry["event"] == "collector_registered_daily"]
         webmaster_registered = [entry for entry in registered if entry["source"] == "webmaster"]
         assert webmaster_registered[0]["sites"] == 1
         started = [entry for entry in captured if entry["event"] == "app_started"]

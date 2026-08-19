@@ -193,7 +193,8 @@ class TestPrometheusEntrypoint:
     def test_fallback_when_key_missing(self) -> None:
         content = self.PROMETHEUS_ENTRYPOINT_SH.read_text(encoding="utf-8")
         assert "NOT_CONFIGURED" in content
-        assert "--storage.tsdb.retention.time=90d" in content
+        # ADR-008: retention поднят с 90d до 400d (годовые срезы)
+        assert "--storage.tsdb.retention.time=400d" in content
 
 
 class TestComposeWiring:

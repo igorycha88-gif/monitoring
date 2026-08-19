@@ -76,6 +76,22 @@ SEARCH_POSITION = Gauge(
     ["site", "query"],
 )
 
+SEARCH_DAILY_CLICKS = Gauge(
+    "monitoring_search_daily_clicks",
+    "Клики по поисковому запросу за последний ЗАВЕРШЁННЫЙ день; дата дня = "
+    "метка времени точки (1 точка/день из per-query history, ADR-008); "
+    "сумма по запросам = сайт (топ-N по кликам); gauge — без rate()",
+    ["site", "query"],
+)
+
+SEARCH_DAILY_SHOWS = Gauge(
+    "monitoring_search_daily_shows",
+    "Показы по поисковому запросу за последний ЗАВЕРШЁННЫЙ день; дата дня = "
+    "метка времени точки (1 точка/день из per-query history, ADR-008); "
+    "сумма по запросам = сайт (топ-N по кликам); gauge — без rate()",
+    ["site", "query"],
+)
+
 SITE_METRICS_UP = Gauge(
     "monitoring_site_metrics_up",
     "Доступность эндпоинта метрик сайта (1 — HTTP 2xx с корректным ключом, "

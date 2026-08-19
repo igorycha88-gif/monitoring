@@ -25,6 +25,7 @@ sites:
   - domain: example.com
   - domain: example.org
   - domain: da-dryclean.ru
+    webmaster_host_id: "https:da-dryclean.ru:443"
     metrics_urls:
       tracking: https://da-dryclean.ru/metrics/tracking
       content: https://da-dryclean.ru/metrics/content

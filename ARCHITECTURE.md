@@ -81,7 +81,9 @@ monitoring/
 │   ├── dashboards/          # JSON-дашборды [ЭПИК-3]:
 │   │   ├── site-overview.json  # «Обзор сайта» (переменная site, 8 панелей)
 │   │   ├── all-sites.json      # «Все сайты» (таблица статусов + спарклайны)
-│   │   └── site-business.json  # «Бизнес сайта» (14 панелей, ЭПИК-9)
+│   │   ├── site-business.json  # «Бизнес сайта» (14 панелей, ЭПИК-9)
+│   │   ├── webmaster-dynamics.json   # «Поиск: динамика показов/кликов по дням» [ADR-008]
+│   │   └── webmaster-top-queries.json # «Поиск: топ запросов» (срезы 7d/30d/365d) [ADR-008]
 │   └── provisioning/        # datasources (uid: prometheus) + dashboards
 ├── prometheus/
 │   ├── prometheus.yml       # scrape (app, node-exporter SD, site-* SD) + rules + alerting
@@ -109,7 +111,11 @@ monitoring/
   текст запроса нормализуется (пробелы + обрезка 100 символов), метрики
   поиска — `monitoring_search_clicks_total` / `monitoring_search_shows_total` /
   `monitoring_search_position` с лейблами `{site, query}` (DoD, gauge,
-  окно «последняя неделя» — ADR-004)
+  окно «последняя неделя» — ADR-004); дневная динамика — per-query
+  `monitoring_search_daily_clicks` / `monitoring_search_daily_shows`
+  `{site, query}` (gauge, 1 точка/день из per-query history,
+  `/search-queries/{query_id}/history`, дата = метка времени — ADR-008;
+  сайт-уровень = `sum()` по отслеживаемым запросам, лейбл даты НЕ вводится)
 - Здоровье САЙТА (`monitoring_uptime_status`) ≠ здоровье КОЛЛЕКТОРА
   (`monitoring_collector_success`): лежащий сайт — это данные (status=0),
   а не ошибка коллектора (см. ADR-002)
@@ -133,6 +139,11 @@ monitoring/
   в панелях напрямую, БЕЗ `rate()`/`increase()`
 - Валидация JSON-дашбордов — `tests/test_dashboards.py`
   (белый список метрик синхронизирован с `app/metrics.py`)
+- Дашборды Вебмастера [ADR-008]: динамика по дням — range-запросы
+  `monitoring_search_daily_*`; топы со срезами — переменная `period`
+  (7d/30d/365d) + `avg_over_time(...)[$period]`; для топов по позиции —
+  `bottomk` (меньшая позиция = лучше); `sum_over_time` по `monitoring_*`
+  gauge запрещён (суммирует семплы скрейпов — завышение)
 
 ### Серверные метрики node_exporter (ЭПИК-6, ADR-005)
 - Python-коллектора НЕТ: Prometheus скрейпит node_exporter напрямую через
@@ -205,7 +216,7 @@ monitoring/
 | Сервис | Порт | Назначение |
 |--------|------|-----------|
 | monitoring-app | 8088 | API + /metrics |
-| prometheus | 9091 | TSDB (retention 90d) + правила алертов |
+| prometheus | 9091 | TSDB (retention 400d — годовые срезы ADR-008) + правила алертов |
 | alertmanager | 9093 | маршрутизация алертов → Telegram [ЭПИК-7] |
 | grafana | 3300 | визуализация (admin, anonymous off) |
 

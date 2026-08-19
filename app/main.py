@@ -53,8 +53,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             oauth_token=settings.yandex_webmaster_oauth_token,
             timeout_seconds=settings.webmaster_timeout_seconds,
             top_queries=settings.webmaster_top_queries,
+            history_days=settings.webmaster_history_days,
         )
-        webmaster_collector.register(scheduler, settings.webmaster_interval_seconds)
+        webmaster_collector.register_daily(
+            scheduler,
+            hour=settings.webmaster_cron_hour,
+            timezone=settings.webmaster_cron_timezone,
+        )
         collectors.append("webmaster")
     else:
         logger.info("webmaster_collector_skipped", reason="no_hosts")

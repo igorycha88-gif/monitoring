@@ -4,10 +4,12 @@ import asyncio
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Sequence
+from datetime import UTC, datetime
 from typing import TypeVar
 
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from app.logging import get_logger
 from app.metrics import (
@@ -150,7 +152,13 @@ class BaseCollector(ABC):
         }
 
     def register(self, scheduler: AsyncIOScheduler, interval_seconds: int) -> None:
-        """Регистрирует периодический запуск коллектора в планировщике."""
+        """Регистрирует периодический запуск коллектора в планировщике.
+
+        Первый запуск — немедленно после старта (иначе данные появляются
+        только через полный интервал). misfire_grace_time = интервалу:
+        опоздавшее задание выполняется, а не отменяется (пробуждение машины
+        из сна не должно пропускать цикл сбора).
+        """
         scheduler.add_job(
             self.run_once,
             trigger="interval",
@@ -159,10 +167,46 @@ class BaseCollector(ABC):
             max_instances=1,
             coalesce=True,
             replace_existing=True,
+            next_run_time=datetime.now(tz=UTC),
+            misfire_grace_time=interval_seconds,
         )
         self.logger.info(
             "collector_registered",
             source=self.source,
             interval_seconds=interval_seconds,
+            sites=len(self.sites),
+        )
+
+    def register_daily(
+        self,
+        scheduler: AsyncIOScheduler,
+        hour: int | str,
+        timezone: str = "Europe/Moscow",
+    ) -> None:
+        """Регистрирует ежедневный запуск коллектора в заданный час (cron).
+
+        Используется для ежедневных источников (Вебмастер: данные обновляются
+        раз в сутки). hour может быть списком часов через запятую ("7,19"):
+        вечерний прогон дозаполняет значения, финализируемые Яндексом с
+        лагом (ADR-008 D1). Первый запуск — немедленно после старта
+        приложения, далее — каждый день в hour:00 указанной таймзоны.
+        misfire_grace_time = 20 часов: запуск, пропущенный из-за сна машины,
+        выполняется при пробуждении, а не отменяется.
+        """
+        scheduler.add_job(
+            self.run_once,
+            trigger=CronTrigger(hour=hour, minute=0, timezone=timezone),
+            id=f"collector_{self.source}",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            next_run_time=datetime.now(tz=UTC),
+            misfire_grace_time=20 * 3600,
+        )
+        self.logger.info(
+            "collector_registered_daily",
+            source=self.source,
+            hour=hour,
+            timezone=timezone,
             sites=len(self.sites),
         )

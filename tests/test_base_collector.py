@@ -2,10 +2,12 @@
 
 import asyncio
 import time
+from datetime import UTC, datetime
 
 import httpx
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from prometheus_client import generate_latest
 from structlog.testing import capture_logs
 
@@ -183,6 +185,78 @@ def test_register_adds_interval_job() -> None:
     assert job is not None
     assert job.trigger is not None
     assert job.trigger.interval.total_seconds() == 60
+
+
+def test_register_first_run_is_immediate() -> None:
+    """Первый запуск — сразу после старта, не через полный интервал."""
+    scheduler = AsyncIOScheduler()
+    collector = DummyCollector(SITES)
+    before = datetime.now(tz=UTC)
+    collector.register(scheduler, 3600)
+    job = scheduler.get_job("collector_dummy")
+    assert job is not None
+    assert job.next_run_time is not None
+    delay_seconds = (job.next_run_time - before).total_seconds()
+    assert delay_seconds < 30, f"первый запуск через {delay_seconds:.0f}с — не немедленный"
+
+
+def test_register_misfire_grace_covers_interval() -> None:
+    """Опоздавший запуск выполняется, а не отменяется (misfire_grace_time)."""
+    scheduler = AsyncIOScheduler()
+    collector = DummyCollector(SITES)
+    collector.register(scheduler, 3600)
+    job = scheduler.get_job("collector_dummy")
+    assert job is not None
+    assert job.misfire_grace_time == 3600
+
+
+def test_register_daily_cron_fields() -> None:
+    """Ежедневная джоба: hour=7, minute=0, таймзона Europe/Moscow (= 04:00 UTC)."""
+    scheduler = AsyncIOScheduler(timezone="UTC")
+    collector = DummyCollector(SITES)
+    collector.register_daily(scheduler, hour=7, timezone="Europe/Moscow")
+    job = scheduler.get_job("collector_dummy")
+    assert job is not None
+    assert isinstance(job.trigger, CronTrigger)
+    fields = {field.name: str(field) for field in job.trigger.fields}
+    assert fields["hour"] == "7"
+    assert fields["minute"] == "0"
+    assert str(job.trigger.timezone) == "Europe/Moscow"
+
+
+def test_register_daily_multiple_hours() -> None:
+    """Список часов "7,19" — утренний + вечерний дозаполняющий прогоны (ADR-008)."""
+    scheduler = AsyncIOScheduler(timezone="UTC")
+    collector = DummyCollector(SITES)
+    collector.register_daily(scheduler, hour="7,19", timezone="Europe/Moscow")
+    job = scheduler.get_job("collector_dummy")
+    assert job is not None
+    assert isinstance(job.trigger, CronTrigger)
+    fields = {field.name: str(field) for field in job.trigger.fields}
+    assert fields["hour"] == "7,19"
+
+
+def test_register_daily_first_run_is_immediate() -> None:
+    """Первый запуск ежедневной джобы — сразу после старта, не в 07:00 следующего дня."""
+    scheduler = AsyncIOScheduler(timezone="UTC")
+    collector = DummyCollector(SITES)
+    before = datetime.now(tz=UTC)
+    collector.register_daily(scheduler, hour=7)
+    job = scheduler.get_job("collector_dummy")
+    assert job is not None
+    assert job.next_run_time is not None
+    delay_seconds = (job.next_run_time - before).total_seconds()
+    assert delay_seconds < 30, f"первый запуск через {delay_seconds:.0f}с — не немедленный"
+
+
+def test_register_daily_misfire_grace() -> None:
+    """Пропущенный из-за сна машины запуск выполняется при пробуждении (20ч)."""
+    scheduler = AsyncIOScheduler(timezone="UTC")
+    collector = DummyCollector(SITES)
+    collector.register_daily(scheduler, hour=7)
+    job = scheduler.get_job("collector_dummy")
+    assert job is not None
+    assert job.misfire_grace_time == 20 * 3600
 
 
 class ParallelDummyCollector(DummyCollector):

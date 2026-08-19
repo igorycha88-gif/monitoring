@@ -52,3 +52,17 @@ def test_prometheus_config_no_real_key() -> None:
     content = PROMETHEUS_CONFIG.read_text(encoding="utf-8")
     assert "__SITE_METRICS_API_KEY__" in content
     assert "X-Monitoring-Key" in content
+
+
+def test_prometheus_retention_supports_year_slices() -> None:
+    """ADR-008: годовые срезы [$period=365d] требуют retention >= 1 года.
+
+    Флаг задаёт entrypoint-скрипт (единственный источник истины): повтор
+    флага в compose command + entrypoint ломает запуск Prometheus (crash).
+    """
+    root = Path(__file__).resolve().parent.parent
+    entrypoint = (root / "prometheus" / "prometheus-entrypoint.sh").read_text(encoding="utf-8")
+    assert "--storage.tsdb.retention.time=400d" in entrypoint
+    assert '"$@"' in entrypoint
+    compose = (root / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "storage.tsdb.retention" not in compose, "флаг только в entrypoint (иначе повтор)"

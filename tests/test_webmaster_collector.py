@@ -1,6 +1,7 @@
 """Тесты WebmasterCollector: API-запросы, метрики, лимиты 429/401/404/5xx (respx)."""
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -12,6 +13,7 @@ from app.sites import SiteConfig
 from collectors.webmaster import (
     QUERY_LABEL_MAX_LENGTH,
     WEBMASTER_API_BASE,
+    YANDEX_TZ,
     WebmasterCollector,
     normalize_query,
 )
@@ -25,6 +27,7 @@ def make_collector(
     domain: str = "w.com",
     extra_domain: str | None = None,
     top_queries: int = 50,
+    history_days: int = 7,
 ) -> WebmasterCollector:
     sites = [SiteConfig(domain=domain, webmaster_host_id=host_id)]
     if extra_domain:
@@ -34,6 +37,7 @@ def make_collector(
         oauth_token=token,
         timeout_seconds=1.0,
         top_queries=top_queries,
+        history_days=history_days,
     )
     collector.retry_base_delay = 0
     return collector
@@ -43,9 +47,44 @@ def popular_url(user_id: int = 1, host_id: str = HOST_ID) -> str:
     return f"{WEBMASTER_API_BASE}/user/{user_id}/hosts/{host_id}/search-queries/popular"
 
 
+# per-query history: .../search-queries/{query_id}/history (ADR-008).
+# path__regex (не url__regex): query-строка не должна ломать матчинг.
+HISTORY_ROUTE_RE = r"/search-queries/[^/]+/history$"
+
+
+def yandex_iso(days_ago: int) -> str:
+    """ISO-дата в таймзоне Яндекса: days_ago суток назад от сегодня (+03:00)."""
+    day = datetime.now(tz=YANDEX_TZ).date() - timedelta(days=days_ago)
+    return f"{day.isoformat()}T00:00:00.000+03:00"
+
+
 def mock_user() -> respx.Route:
     return respx.get(f"{WEBMASTER_API_BASE}/user").mock(
         return_value=httpx.Response(200, json={"user_id": 1})
+    )
+
+
+def mock_history(
+    shows: list[dict[str, object]] | None = None,
+    clicks: list[dict[str, object]] | None = None,
+    response: httpx.Response | None = None,
+) -> respx.Route:
+    """Мок per-query history (любой query_id).
+
+    По умолчанию — indicators без точек: валидный ответ, 0 дневных значений
+    (индикатор «не определён» — документированное поведение API).
+    """
+    if response is not None:
+        return respx.get(path__regex=HISTORY_ROUTE_RE).mock(return_value=response)
+    indicators: dict[str, object] = {}
+    if shows is not None:
+        indicators["TOTAL_SHOWS"] = shows
+    if clicks is not None:
+        indicators["TOTAL_CLICKS"] = clicks
+    return respx.get(path__regex=HISTORY_ROUTE_RE).mock(
+        return_value=httpx.Response(
+            200, json={"query_id": "mock", "query_text": "mock", "indicators": indicators}
+        )
     )
 
 
@@ -63,6 +102,7 @@ QUERY_FULL: dict[str, object] = {
 @respx.mock
 async def test_collect_success_writes_metrics_and_request_params() -> None:
     user_route = mock_user()
+    mock_history()
     route = respx.get(popular_url()).mock(
         return_value=popular_response(
             [
@@ -113,6 +153,7 @@ async def test_collect_success_writes_metrics_and_request_params() -> None:
 @respx.mock
 async def test_user_id_resolved_once_and_cached() -> None:
     user_route = mock_user()
+    mock_history()
     popular = respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
     collector = make_collector()
 
@@ -126,6 +167,7 @@ async def test_user_id_resolved_once_and_cached() -> None:
 @respx.mock
 async def test_empty_queries_is_success_zero_points() -> None:
     mock_user()
+    mock_history()
     respx.get(popular_url()).mock(return_value=popular_response([]))
     collector = make_collector()
 
@@ -141,6 +183,7 @@ async def test_rate_limit_then_success_sleeps_retry_after(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     mock_user()
+    mock_history()
     route = respx.get(popular_url()).mock(
         side_effect=[
             httpx.Response(429, headers={"Retry-After": "5"}),
@@ -263,6 +306,7 @@ async def test_timeout_retried_then_fails() -> None:
 @respx.mock
 async def test_server_error_retried_then_success() -> None:
     mock_user()
+    mock_history()
     route = respx.get(popular_url()).mock(
         side_effect=[httpx.Response(503), popular_response([QUERY_FULL])]
     )
@@ -412,6 +456,7 @@ async def test_sites_without_host_skipped() -> None:
 @respx.mock
 async def test_host_site_and_plain_site_mixed() -> None:
     mock_user()
+    mock_history()
     respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
     collector = make_collector(domain="with.com", extra_domain="without.com")
 
@@ -426,9 +471,10 @@ async def test_host_site_and_plain_site_mixed() -> None:
 @respx.mock
 async def test_missing_indicator_not_written() -> None:
     mock_user()
+    mock_history()
     respx.get(popular_url()).mock(
         return_value=popular_response(
-            [{"query_text": "только клики", "indicators": {"TOTAL_CLICKS": 5}}]
+            [{"query_id": "q1", "query_text": "только клики", "indicators": {"TOTAL_CLICKS": 5}}]
         )
     )
     collector = make_collector()
@@ -447,6 +493,7 @@ async def test_missing_indicator_not_written() -> None:
 @respx.mock
 async def test_blank_query_skipped() -> None:
     mock_user()
+    mock_history()
     respx.get(popular_url()).mock(
         return_value=popular_response([{"query_text": "   ", "indicators": {}}])
     )
@@ -466,11 +513,16 @@ async def test_blank_query_skipped() -> None:
 async def test_query_label_normalized() -> None:
     mock_user()
     long_text = "a" * (QUERY_LABEL_MAX_LENGTH + 10)
+    mock_history()
     respx.get(popular_url()).mock(
         return_value=popular_response(
             [
-                {"query_text": "  много   пробелов\t", "indicators": {"TOTAL_CLICKS": 1}},
-                {"query_text": long_text, "indicators": {"TOTAL_CLICKS": 2}},
+                {
+                    "query_id": "q1",
+                    "query_text": "  много   пробелов\t",
+                    "indicators": {"TOTAL_CLICKS": 1},
+                },
+                {"query_id": "q2", "query_text": long_text, "indicators": {"TOTAL_CLICKS": 2}},
             ]
         )
     )
@@ -491,6 +543,7 @@ async def test_query_label_normalized() -> None:
 @respx.mock
 async def test_top_queries_clamped(top_queries: int, expected_limit: str) -> None:
     mock_user()
+    mock_history()
     route = respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
     collector = make_collector(top_queries=top_queries)
 
@@ -503,6 +556,7 @@ async def test_top_queries_clamped(top_queries: int, expected_limit: str) -> Non
 async def test_repeated_collection_updates_values() -> None:
     """История позиций строится TSDB: повторный сбор обновляет значения метрик."""
     mock_user()
+    mock_history()
     respx.get(popular_url()).mock(
         side_effect=[
             popular_response([QUERY_FULL]),
@@ -544,6 +598,360 @@ def test_collector_attributes() -> None:
     collector = make_collector()
     assert collector.source == "webmaster"
     assert collector.parallel is False
+
+
+# --- Дневная история поисковых запросов (per-query, ADR-008) ---
+
+
+@respx.mock
+async def test_history_writes_only_newest_complete_point() -> None:
+    """Из окна истории пишется только новейшая ЗАВЕРШЁННАЯ точка (ADR-008 D1)."""
+    mock_user()
+    respx.get(popular_url()).mock(
+        return_value=popular_response(
+            [QUERY_FULL, {"query_id": "a2", "query_text": "слон недорого", "indicators": {}}]
+        )
+    )
+    mock_history(
+        shows=[
+            {"date": yandex_iso(3), "value": 100},
+            {"date": yandex_iso(1), "value": 200},
+            {"date": yandex_iso(2), "value": 150},
+        ],
+        clicks=[{"date": yandex_iso(1), "value": 7}, {"date": yandex_iso(0), "value": 999}],
+    )
+    collector = make_collector(domain="hist.com")
+
+    with capture_logs() as captured:
+        result = await collector.run_once()
+
+    # 2 popular-запроса × 3 метрики... QUERY_FULL даёт 3, второй (indicators={}) — 0;
+    # history: 2 запроса × 2 индикатора = 4. Сегодня (999) исключено.
+    assert result == {"sites_ok": 1, "sites_total": 1, "points_total": 3 + 4}
+    metrics = generate_latest().decode()
+    assert 'monitoring_search_daily_clicks{query="купить слона",site="hist.com"} 7.0' in metrics
+    assert 'monitoring_search_daily_shows{query="купить слона",site="hist.com"} 200.0' in metrics
+    assert 'monitoring_search_daily_clicks{query="слон недорого",site="hist.com"} 7.0' in metrics
+    assert (
+        'monitoring_search_daily_clicks{query="купить слона",site="hist.com"} 999' not in metrics
+    )  # сегодняшний (незавершённый) день исключён
+    written = [entry for entry in captured if entry["event"] == "webmaster_history_written"]
+    assert len(written) == 2  # по одному событию на запрос (клики + показы внутри)
+    assert all("test-token" not in str(entry) for entry in captured)
+
+
+@respx.mock
+async def test_history_excludes_incomplete_today() -> None:
+    """Точки только за сегодня (незавершённый день) не пишутся."""
+    mock_user()
+    respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
+    mock_history(
+        shows=[{"date": yandex_iso(0), "value": 999}],
+        clicks=[{"date": yandex_iso(0), "value": 999}],
+    )
+    collector = make_collector(domain="only-today.com")
+
+    result = await collector.run_once()
+
+    assert result == {"sites_ok": 1, "sites_total": 1, "points_total": 3}
+    metrics = generate_latest().decode()
+    assert 'monitoring_search_daily_clicks{site="only-today.com"' not in metrics
+    assert 'monitoring_search_daily_shows{site="only-today.com"' not in metrics
+
+
+@respx.mock
+async def test_history_empty_indicators_success() -> None:
+    """Индикаторы без точек — данные: успех, дневные метрики не пишутся."""
+    mock_user()
+    respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
+    mock_history()
+    collector = make_collector(domain="empty-hist.com")
+
+    result = await collector.run_once()
+
+    assert result == {"sites_ok": 1, "sites_total": 1, "points_total": 3}
+    metrics = generate_latest().decode()
+    assert 'monitoring_search_daily_clicks{site="empty-hist.com"' not in metrics
+    assert 'monitoring_search_daily_shows{site="empty-hist.com"' not in metrics
+
+
+@respx.mock
+async def test_history_missing_indicator_partial_write() -> None:
+    """Отсутствующий индикатор не пишется (не 0) — паттерн ADR-004."""
+    mock_user()
+    respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
+    mock_history(clicks=[{"date": yandex_iso(1), "value": 7}])
+    collector = make_collector(domain="partial-hist.com")
+
+    result = await collector.run_once()
+
+    assert result["points_total"] == 4  # 3 popular + 1 history
+    metrics = generate_latest().decode()
+    assert 'monitoring_search_daily_clicks{query="купить слона",site="partial-hist.com"} 7.0' in (
+        metrics
+    )
+    assert 'monitoring_search_daily_shows{query="купить слона",site="partial-hist.com"' not in (
+        metrics
+    )
+
+
+@respx.mock
+async def test_history_request_params_and_window() -> None:
+    """query_indicator повторяемый + окно date_from/date_to = history_days дней."""
+    mock_user()
+    respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
+    route = mock_history(clicks=[{"date": yandex_iso(1), "value": 7}])
+    collector = make_collector()
+
+    await collector.run_once()
+
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == "OAuth test-token"
+    params = request.url.params
+    assert params.get_list("query_indicator") == ["TOTAL_SHOWS", "TOTAL_CLICKS"]
+    today = datetime.now(tz=UTC).date()
+    assert params["date_to"] == today.isoformat()
+    assert params["date_from"] == (today - timedelta(days=6)).isoformat()
+
+
+@pytest.mark.parametrize(
+    ("history_days", "back_days"),
+    [(100, 30), (0, 0), (-5, 0), (14, 13)],
+)
+@respx.mock
+async def test_history_days_clamped(history_days: int, back_days: int) -> None:
+    mock_user()
+    respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
+    route = mock_history()
+    collector = make_collector(history_days=history_days)
+
+    await collector.run_once()
+
+    params = route.calls.last.request.url.params
+    today = datetime.now(tz=UTC).date()
+    assert params["date_from"] == (today - timedelta(days=back_days)).isoformat()
+    assert params["date_to"] == today.isoformat()
+
+
+@respx.mock
+async def test_history_query_404_skipped_not_site_error() -> None:
+    """404 на запрос (выпал из выдачи между /popular и /history) — пропуск."""
+    mock_user()
+    respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
+    route = respx.get(path__regex=HISTORY_ROUTE_RE).mock(
+        return_value=httpx.Response(404, json={"error_code": "QUERY_ID_NOT_FOUND"})
+    )
+    collector = make_collector(domain="hist-404q.com")
+
+    with capture_logs() as captured:
+        result = await collector.run_once()
+
+    assert result == {"sites_ok": 1, "sites_total": 1, "points_total": 3}
+    assert route.call_count == 1
+    metrics = generate_latest().decode()
+    assert 'monitoring_collector_success{site="hist-404q.com",source="webmaster"} 1.0' in metrics
+    skipped = [entry for entry in captured if entry["event"] == "webmaster_history_query_skipped"]
+    assert len(skipped) == 1
+    done = [entry for entry in captured if entry["event"] == "webmaster_history_done"]
+    assert done[0]["points"] == 0
+
+
+@respx.mock
+async def test_history_rate_limit_exhausted_is_collector_error() -> None:
+    mock_user()
+    respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
+    route = respx.get(path__regex=HISTORY_ROUTE_RE).mock(return_value=httpx.Response(429))
+    collector = make_collector(domain="hist-429.com")
+
+    result = await collector.run_once()
+
+    assert result["sites_ok"] == 0
+    assert route.call_count == 3
+    metrics = generate_latest().decode()
+    assert 'monitoring_collector_success{site="hist-429.com",source="webmaster"} 0.0' in metrics
+
+
+@respx.mock
+async def test_history_auth_error_no_retry() -> None:
+    mock_user()
+    respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
+    route = respx.get(path__regex=HISTORY_ROUTE_RE).mock(return_value=httpx.Response(403))
+    collector = make_collector(domain="hist-403.com")
+
+    with capture_logs() as captured:
+        result = await collector.run_once()
+
+    assert result["sites_ok"] == 0
+    assert route.call_count == 1
+    errors = [entry for entry in captured if entry["event"] == "collector_site_error"]
+    assert errors[0]["error_type"] == "WebmasterAuthError"
+
+
+@respx.mock
+async def test_history_server_error_retried_then_success() -> None:
+    mock_user()
+    respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
+    route = respx.get(path__regex=HISTORY_ROUTE_RE).mock(
+        side_effect=[
+            httpx.Response(503),
+            httpx.Response(
+                200,
+                json={
+                    "query_id": "a1",
+                    "query_text": "купить слона",
+                    "indicators": {
+                        "TOTAL_CLICKS": [{"date": yandex_iso(1), "value": 9}],
+                        "TOTAL_SHOWS": [{"date": yandex_iso(1), "value": 90}],
+                    },
+                },
+            ),
+        ]
+    )
+    collector = make_collector(domain="hist-503.com")
+
+    result = await collector.run_once()
+
+    assert result["sites_ok"] == 1
+    assert route.call_count == 2
+    metrics = generate_latest().decode()
+    assert 'monitoring_search_daily_clicks{query="купить слона",site="hist-503.com"} 9.0' in (
+        metrics
+    )
+
+
+@respx.mock
+async def test_history_timeout_retried_then_fails() -> None:
+    mock_user()
+    respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
+    route = respx.get(path__regex=HISTORY_ROUTE_RE).mock(side_effect=httpx.ReadTimeout("t/o"))
+    collector = make_collector(domain="hist-to.com")
+
+    with capture_logs() as captured:
+        result = await collector.run_once()
+
+    assert result["sites_ok"] == 0
+    assert route.call_count == 3
+    errors = [entry for entry in captured if entry["event"] == "collector_site_error"]
+    assert errors[0]["error_type"] == "ReadTimeout"
+
+
+@pytest.mark.parametrize(
+    "history_payload",
+    [
+        httpx.Response(200, text="not json"),
+        httpx.Response(200, json={"query_id": "a1"}),
+        httpx.Response(200, json={"query_id": "a1", "indicators": "not-a-dict"}),
+        httpx.Response(200, json={"query_id": "a1", "indicators": {"TOTAL_SHOWS": "not-a-list"}}),
+        httpx.Response(
+            200,
+            json={"query_id": "a1", "indicators": {"TOTAL_SHOWS": ["not-a-dict"]}},
+        ),
+        httpx.Response(
+            200,
+            json={"query_id": "a1", "indicators": {"TOTAL_SHOWS": [{"value": 1.0}]}},
+        ),
+        httpx.Response(
+            200,
+            json={"query_id": "a1", "indicators": {"TOTAL_SHOWS": [{"date": "d"}]}},
+        ),
+        httpx.Response(
+            200,
+            json={
+                "query_id": "a1",
+                "indicators": {"TOTAL_SHOWS": [{"date": "19-08-2026", "value": 1.0}]},
+            },
+        ),
+    ],
+    ids=[
+        "not-json",
+        "no-indicators",
+        "indicators-not-dict",
+        "points-not-list",
+        "point-not-dict",
+        "no-date",
+        "no-value",
+        "bad-date-format",
+    ],
+)
+@respx.mock
+async def test_history_malformed_response_is_error(history_payload: httpx.Response) -> None:
+    mock_user()
+    respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
+    respx.get(path__regex=HISTORY_ROUTE_RE).mock(return_value=history_payload)
+    collector = make_collector(domain="bad-hist.com")
+
+    with capture_logs() as captured:
+        result = await collector.run_once()
+
+    assert result["sites_ok"] == 0
+    errors = [entry for entry in captured if entry["event"] == "collector_site_error"]
+    assert errors[0]["error_type"] == "WebmasterApiError"
+
+
+@respx.mock
+async def test_popular_query_without_id_is_error() -> None:
+    """query_id обязателен в popular (нужен для per-query history)."""
+    mock_user()
+    respx.get(popular_url()).mock(
+        return_value=popular_response(
+            [{"query_text": "без идентификатора", "indicators": {"TOTAL_CLICKS": 1}}]
+        )
+    )
+    collector = make_collector(domain="no-qid.com")
+
+    with capture_logs() as captured:
+        result = await collector.run_once()
+
+    assert result["sites_ok"] == 0
+    errors = [entry for entry in captured if entry["event"] == "collector_site_error"]
+    assert errors[0]["error_type"] == "WebmasterApiError"
+
+
+@respx.mock
+async def test_history_repeated_collection_updates_values() -> None:
+    """Повторный сбор обновляет дневные метрики (ряды накапливаются в TSDB)."""
+    mock_user()
+    respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
+    respx.get(path__regex=HISTORY_ROUTE_RE).mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json={
+                    "query_id": "a1",
+                    "indicators": {
+                        "TOTAL_CLICKS": [{"date": yandex_iso(2), "value": 4}],
+                        "TOTAL_SHOWS": [{"date": yandex_iso(2), "value": 40}],
+                    },
+                },
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "query_id": "a1",
+                    "indicators": {
+                        "TOTAL_CLICKS": [{"date": yandex_iso(1), "value": 8}],
+                        "TOTAL_SHOWS": [{"date": yandex_iso(1), "value": 80}],
+                    },
+                },
+            ),
+        ]
+    )
+    collector = make_collector(domain="hist-repeat.com")
+
+    await collector.run_once()
+    first = generate_latest().decode()
+    assert 'monitoring_search_daily_clicks{query="купить слона",site="hist-repeat.com"} 4.0' in (
+        first
+    )
+
+    await collector.run_once()
+    second = generate_latest().decode()
+    assert 'monitoring_search_daily_clicks{query="купить слона",site="hist-repeat.com"} 8.0' in (
+        second
+    )
+    assert 'monitoring_search_daily_shows{query="купить слона",site="hist-repeat.com"} 80.0' in (
+        second
+    )
 
 
 def test_normalize_query_unit() -> None:

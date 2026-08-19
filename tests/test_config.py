@@ -37,6 +37,17 @@ def test_site_metrics_defaults() -> None:
     assert settings.site_metrics_api_key == ""
 
 
+def test_webmaster_history_days_default() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.webmaster_history_days == 7
+
+
+def test_webmaster_history_days_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WEBMASTER_HISTORY_DAYS", "14")
+    settings = Settings(_env_file=None)
+    assert settings.webmaster_history_days == 14
+
+
 def test_site_metrics_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SITE_METRICS_INTERVAL_SECONDS", "30")
     monkeypatch.setenv("SITE_METRICS_TIMEOUT_SECONDS", "5.0")

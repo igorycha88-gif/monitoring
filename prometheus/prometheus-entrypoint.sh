@@ -18,6 +18,9 @@ ESCAPED_KEY=$(printf '%s' "$API_KEY" | sed 's/[&/\]/\\&/g')
 
 sed -e "s/__SITE_METRICS_API_KEY__/${ESCAPED_KEY}/g" "$TEMPLATE" > "$TARGET"
 
+# ADR-008: retention 400d — годовые срезы топов запросов; "$@" пробрасывает
+# command из docker-compose (будущие флаги без правки скрипта).
 exec prometheus \
   --config.file="$TARGET" \
-  --storage.tsdb.retention.time=90d
+  --storage.tsdb.retention.time=400d \
+  "$@"

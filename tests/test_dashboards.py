@@ -11,7 +11,13 @@ from app import metrics
 
 DASHBOARDS_DIR = Path(__file__).resolve().parent.parent / "grafana" / "dashboards"
 
-DASHBOARD_NAMES = ("site-overview.json", "all-sites.json", "site-business.json")
+DASHBOARD_NAMES = (
+    "site-overview.json",
+    "all-sites.json",
+    "site-business.json",
+    "webmaster-dynamics.json",
+    "webmaster-top-queries.json",
+)
 
 # Белый список собираем из реестра приложения (app/metrics.py),
 # чтобы тест не разошёлся с реальными метриками.
@@ -78,11 +84,13 @@ def test_exprs_filter_by_site_variable() -> None:
 
 def test_no_rate_or_increase_on_project_metrics() -> None:
     # Метрики проекта monitoring_* — gauge: rate()/increase() недопустимы.
+    # sum_over_time по gauge суммирует семплы скрейпов — завышение (ADR-008 D3).
     # node_* (node_exporter, ЭПИК-6) — counter: rate() для них разрешён (ADR-005).
     for name in DASHBOARD_NAMES:
         for expr in panel_exprs(load_dashboard(name)):
-            if "rate(" in expr or "increase(" in expr:
-                assert "monitoring_" not in expr, f"{name}: {expr!r}"
+            for forbidden in ("rate(", "increase(", "sum_over_time("):
+                if forbidden in expr:
+                    assert "monitoring_" not in expr, f"{name}: {expr!r}"
 
 
 def test_threshold_steps_sorted_ascending() -> None:
@@ -114,7 +122,7 @@ def test_panels_use_provisioned_prometheus_datasource() -> None:
 
 def test_site_overview_structure() -> None:
     dashboard = load_dashboard("site-overview.json")
-    assert len(dashboard["panels"]) == 12
+    assert len(dashboard["panels"]) == 18
     titles = {panel["title"] for panel in dashboard["panels"]}
     assert titles == {
         "Доступность",
@@ -129,6 +137,12 @@ def test_site_overview_structure() -> None:
         "RAM, %",
         "Диск /, %",
         "Load average (1m)",
+        "Поиск (Яндекс.Вебмастер, за последнюю неделю)",
+        "Клики за неделю",
+        "Показы за неделю",
+        "Топ-15 поисковых запросов по кликам",
+        "Позиция в поиске (меньше — лучше)",
+        "",
     }
     var = dashboard["templating"]["list"][0]
     assert var["name"] == "site"
@@ -150,6 +164,33 @@ def test_site_overview_server_panels() -> None:
     assert "node_filesystem_avail_bytes" in disk and "node_filesystem_size_bytes" in disk
     load_avg = by_title["Load average (1m)"]["targets"][0]["expr"]
     assert load_avg == 'node_load1{site="$site"}'
+
+
+def test_site_overview_webmaster_panels() -> None:
+    """Панели Вебмастера: instant-запросы, фильтр по сайту, gauge без rate()."""
+    dashboard = load_dashboard("site-overview.json")
+    by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+    clicks = by_title["Клики за неделю"]["targets"][0]["expr"]
+    assert clicks == 'sum(monitoring_search_clicks_total{site="$site"})'
+    shows = by_title["Показы за неделю"]["targets"][0]["expr"]
+    assert shows == 'sum(monitoring_search_shows_total{site="$site"})'
+    table = by_title["Топ-15 поисковых запросов по кликам"]
+    table_target = table["targets"][0]
+    assert table_target["format"] == "table"
+    assert table_target["instant"] is True
+    assert table_target["expr"] == 'topk(15, monitoring_search_clicks_total{site="$site"})'
+    renames = table["transformations"][0]["options"]["renameByName"]
+    assert renames == {"query": "Запрос", "Value": "Клики"}
+    position = by_title["Позиция в поиске (меньше — лучше)"]
+    position_exprs = {target["expr"] for target in position["targets"]}
+    assert position_exprs == {
+        'avg(monitoring_search_position{site="$site"})',
+        'min(monitoring_search_position{site="$site"})',
+    }
+    # Одна точка данных должна быть видна: showPoints != never (иначе линия
+    # из единственной точки не отрисовывается — панель выглядит пустой).
+    position_custom = position["fieldConfig"]["defaults"]["custom"]
+    assert position_custom["showPoints"] in ("auto", "always")
 
 
 def test_all_sites_structure() -> None:
@@ -222,3 +263,74 @@ def test_site_business_panels_use_business_and_site_metrics() -> None:
         assert metric in joined, metric
     assert "monitoring_site_metrics_up" in joined
     assert "monitoring_site_metrics_latency_seconds" in joined
+
+
+def test_webmaster_dynamics_structure() -> None:
+    """ADR-008: дашборд дневной динамики — 2 timeseries-панели, переменная site."""
+    dashboard = load_dashboard("webmaster-dynamics.json")
+    assert dashboard["uid"] == "webmaster-dynamics"
+    assert len(dashboard["panels"]) == 2
+    by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+    assert by_title["Показы по дням"]["type"] == "timeseries"
+    assert by_title["Клики по дням"]["type"] == "timeseries"
+    # Сайт = сумма по отслеживаемым запросам (per-query history, ADR-008)
+    assert (
+        by_title["Показы по дням"]["targets"][0]["expr"]
+        == 'sum(monitoring_search_daily_shows{site="$site"})'
+    )
+    assert (
+        by_title["Клики по дням"]["targets"][0]["expr"]
+        == 'sum(monitoring_search_daily_clicks{site="$site"})'
+    )
+    var = dashboard["templating"]["list"][0]
+    assert var["name"] == "site"
+    assert var["multi"] is False
+    assert var["includeAll"] is False
+    assert "label_values(monitoring_search_daily_shows, site)" in str(var["query"]["query"])
+
+
+def test_webmaster_top_queries_structure() -> None:
+    """ADR-008: дашборд топов — 3 instant-таблицы, переменные site + period."""
+    dashboard = load_dashboard("webmaster-top-queries.json")
+    assert dashboard["uid"] == "webmaster-top-queries"
+    assert len(dashboard["panels"]) == 3
+    by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+    assert set(by_title) == {
+        "Топ-5 запросов по позиции (лучшие)",
+        "Топ-5 запросов по кликам",
+        "Топ-5 запросов по показам",
+    }
+    for title, panel in by_title.items():
+        assert panel["type"] == "table", title
+        target = panel["targets"][0]
+        assert target["format"] == "table", title
+        assert target["instant"] is True, title
+        assert "[$period]" in target["expr"], title
+        assert "avg_over_time(" in target["expr"], title
+
+    position = by_title["Топ-5 запросов по позиции (лучшие)"]["targets"][0]["expr"]
+    assert position == (
+        'bottomk(5, avg_over_time(monitoring_search_position{site="$site"}[$period]))'
+    )
+    clicks = by_title["Топ-5 запросов по кликам"]["targets"][0]["expr"]
+    assert clicks == (
+        'topk(5, avg_over_time(monitoring_search_clicks_total{site="$site"}[$period]))'
+    )
+    shows = by_title["Топ-5 запросов по показам"]["targets"][0]["expr"]
+    assert shows == ('topk(5, avg_over_time(monitoring_search_shows_total{site="$site"}[$period]))')
+    # Колонки таблиц человекочитаемы
+    renames = by_title["Топ-5 запросов по кликам"]["transformations"][0]["options"]["renameByName"]
+    assert renames == {"query": "Запрос", "Value": "Клики/нед (среднее за период)"}
+
+    variables = {var["name"]: var for var in dashboard["templating"]["list"]}
+    assert variables["site"]["multi"] is False
+    assert "label_values(monitoring_search_clicks_total, site)" in str(variables["site"]["query"])
+    period = variables["period"]
+    assert period["type"] == "custom"
+    assert [(option["text"], option["value"]) for option in period["options"]] == [
+        ("Неделя", "7d"),
+        ("Месяц", "30d"),
+        ("Год", "365d"),
+    ]
+    # Пометка о приближённости срезов месяц/год (ADR-008 D3)
+    assert "приближение" in dashboard["description"]

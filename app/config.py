@@ -28,9 +28,15 @@ class Settings(BaseSettings):
     metrika_interval_seconds: int = 300
     metrika_timeout_seconds: float = 10.0
 
-    webmaster_interval_seconds: int = 3600
+    # Ежедневный cron запуска (Europe/Moscow). Часы через запятую: утренний
+    # прогон + вечерний дозаполняющий — агрегаты Яндекса финализируются с
+    # лагом, gauge перезаписывается финальным значением того же дня (ADR-008)
+    webmaster_cron_hour: str = "7,19"
+    webmaster_cron_timezone: str = "Europe/Moscow"
     webmaster_timeout_seconds: float = 10.0
     webmaster_top_queries: int = 50
+    # Окно запроса дневной истории поиска (ADR-008): запас на лаг обновления данных Яндекса
+    webmaster_history_days: int = 7
 
     yandex_metrika_oauth_token: str = ""
     yandex_webmaster_oauth_token: str = ""
