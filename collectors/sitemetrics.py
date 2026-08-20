@@ -33,11 +33,12 @@ class SiteMetricsCollector(BaseCollector):
         self,
         sites: Sequence[SiteConfig],
         timeout_seconds: float,
-        api_key: str,
+        api_keys: dict[str, str],
     ) -> None:
         super().__init__(sites)
         self.timeout_seconds = timeout_seconds
-        self.api_key = api_key
+        # ADR-010 D5: персональный ключ каждого сайта (domain → ключ).
+        self.api_keys = api_keys
 
     async def collect_site(self, site: SiteConfig) -> int:
         """Проверяет все metrics_urls сайта; пишет по 3 метрики на kind."""
@@ -47,7 +48,7 @@ class SiteMetricsCollector(BaseCollector):
         points = 0
         async with httpx.AsyncClient(
             timeout=self.timeout_seconds,
-            headers={MONITORING_KEY_HEADER: self.api_key},
+            headers={MONITORING_KEY_HEADER: self.api_keys.get(site.domain, "")},
             follow_redirects=False,
         ) as client:
             for kind, url in sorted(urls.items()):

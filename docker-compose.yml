@@ -22,11 +22,9 @@ services:
     container_name: monitoring-prometheus
     restart: unless-stopped
     # Флаги (retention 400d — ADR-008) задаёт prometheus-entrypoint.sh;
-    # здесь command НЕ дублируется (повтор флага = crash Prometheus)
-    # ЭПИК-9 (ADR-007 D3): ключ X-Monitoring-Key подставляется в конфиг
-    # entrypoint-скриптом из env; в prometheus.yml — только плейсхолдер.
-    environment:
-      SITE_METRICS_API_KEY: ${SITE_METRICS_API_KEY:-}
+    # здесь command НЕ дублируется (повтор флага = crash Prometheus).
+    # ADR-010: скрейпы site-* идут через relay приложения — Prometheus
+    # не получает секретов вообще.
     entrypoint: ["/bin/sh", "/etc/prometheus/prometheus-entrypoint.sh"]
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml.tmpl:ro

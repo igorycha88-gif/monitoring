@@ -31,3 +31,16 @@ sites:
       content: https://da-dryclean.ru/metrics/content
       node: https://da-dryclean.ru/metrics/node
       postgres: https://da-dryclean.ru/metrics/postgres
+  # Эвакуация.online (ЧТЗ_Подключение_эвакуация_online v1.1):
+  # ключ X-Monitoring-Key — персайтный, в .env (SITE_METRICS_API_KEYS, ADR-010).
+  # Вебмастер — после готовности site-metrics на стороне сайта (решение владельца).
+  - domain: эвакуация.online
+    metrika_counter_id: 111456265
+    # host_id из API Вебмастера аккаунта владельца (uid 1145135652),
+    # punycode-форма — как верифицирован хост в Яндексе
+    webmaster_host_id: "https:xn--80aae0ai8cwa4cza.online:443"
+    metrics_urls:
+      tracking: https://эвакуация.online/metrics/tracking
+      content: https://эвакуация.online/metrics/content
+      node: https://эвакуация.online/metrics/node
+      postgres: https://эвакуация.online/metrics/postgres

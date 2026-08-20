@@ -168,8 +168,9 @@ def test_lifespan_warns_when_site_metrics_key_empty(
         encoding="utf-8",
     )
     monkeypatch.setenv("SITES_CONFIG_PATH", str(config_file))
-    # Пустая env-переменная перекрывает значение из .env (env > env_file)
+    # Пустые env-переменные перекрывают значения из .env (env > env_file)
     monkeypatch.setenv("SITE_METRICS_API_KEY", "")
+    monkeypatch.setenv("SITE_METRICS_API_KEYS", "")
     monkeypatch.setattr(main_module, "setup_logging", lambda *a, **k: None)
     get_settings.cache_clear()
 
@@ -178,8 +179,9 @@ def test_lifespan_warns_when_site_metrics_key_empty(
             response = client.get("/health")
 
         assert response.status_code == 200
-        warnings = [entry for entry in captured if entry["event"] == "site_metrics_api_key_empty"]
+        warnings = [entry for entry in captured if entry["event"] == "site_metrics_api_keys_empty"]
         assert warnings
+        assert warnings[0]["sites"] == ["sm-test.com"]
 
 
 def test_lifespan_invalid_sites_config_fails_startup(

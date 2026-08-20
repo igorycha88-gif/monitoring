@@ -97,9 +97,11 @@ def _number(value: Any) -> float | None:
 class WebmasterCollector(BaseCollector):
     """Сбор топа поисковых запросов (клики/показы/позиция) за последнюю неделю (ЭПИК-5, ADR-004).
 
-    Последовательный обход (лимиты API). user_id Яндекса разрешается лениво
-    через GET /v4/user и кэшируется. Сайты без webmaster_host_id пропускаются
-    при инициализации: метрики collector_* для них не создаются.
+    Последовательный обход (лимиты API). Токен — на сайт (персайтные
+    OAuth-токены: сайты верифицируются в разных аккаунтах Яндекса);
+    user_id аккаунта разрешается лениво через GET /v4/user и кэшируется
+    на токен. Сайты без webmaster_host_id пропускаются при инициализации:
+    метрики collector_* для них не создаются.
     """
 
     source = "webmaster"
@@ -108,7 +110,7 @@ class WebmasterCollector(BaseCollector):
     def __init__(
         self,
         sites: Sequence[SiteConfig],
-        oauth_token: str,
+        oauth_tokens: dict[str, str],
         timeout_seconds: float,
         top_queries: int = 50,
         api_base: str = WEBMASTER_API_BASE,
@@ -119,20 +121,24 @@ class WebmasterCollector(BaseCollector):
         all_sites = self.sites
         self.sites = [site for site in all_sites if site.webmaster_host_id is not None]
         self.skipped_sites = len(all_sites) - len(self.sites)
-        self.oauth_token = oauth_token
+        # Домен → токен; "" у домена — токен не задан (ошибка сайта при сборе).
+        self.oauth_tokens = {
+            domain.strip().lower(): token for domain, token in oauth_tokens.items()
+        }
         self.timeout_seconds = timeout_seconds
         self.top_queries = max(1, min(top_queries, TOP_QUERIES_LIMIT))
         self.api_base = api_base.rstrip("/")
         self.user_url = f"{self.api_base}/user"
         self.history_days = max(1, min(history_days, HISTORY_DAYS_LIMIT))
         self.storage = storage
-        self._user_id: int | None = None
+        self._user_ids: dict[str, int] = {}
         self.logger.info(
             "webmaster_collector_init",
             hosts=len(self.sites),
             skipped_sites=self.skipped_sites,
             top_queries=self.top_queries,
             history_days=self.history_days,
+            per_site_tokens=len(self.oauth_tokens),
             storage_enabled=storage is not None,
         )
 
@@ -146,18 +152,22 @@ class WebmasterCollector(BaseCollector):
         host_id = site.webmaster_host_id
         if host_id is None:
             return 0
-        if not self.oauth_token:
-            raise WebmasterConfigError("YANDEX_WEBMASTER_OAUTH_TOKEN пуст (секреты в .env)")
-        user_id = await self._get_user_id()
+        token = self.oauth_tokens.get(site.domain.strip().lower(), "")
+        if not token:
+            raise WebmasterConfigError(
+                f"OAuth-токен Вебмастера для {site.domain} не задан "
+                "(YANDEX_WEBMASTER_OAUTH_TOKENS / YANDEX_WEBMASTER_OAUTH_TOKEN, секреты в .env)"
+            )
+        user_id = await self._get_user_id(token)
         rows = await self.retry(
-            lambda: self._fetch_queries(user_id, host_id),
+            lambda: self._fetch_queries(user_id, host_id, token),
             retry_on=WEBMASTER_RETRYABLE,
         )
         points = 0
         for row in rows:
             points += self._write_row(site.domain, row)
         await self._save_weekly_safe(site.domain, rows)
-        points += await self._write_daily_history(user_id, host_id, site.domain, rows)
+        points += await self._write_daily_history(user_id, host_id, site.domain, rows, token)
         self.logger.info(
             "webmaster_collect_done",
             site=site.domain,
@@ -181,24 +191,25 @@ class WebmasterCollector(BaseCollector):
             points += 1
         return points
 
-    async def _get_user_id(self) -> int:
-        """user_id Яндекса (кэшируется в экземпляре после первого успеха)."""
-        if self._user_id is not None:
-            return self._user_id
+    async def _get_user_id(self, token: str) -> int:
+        """user_id аккаунта токена (кэшируется на токен после первого успеха)."""
+        cached = self._user_ids.get(token)
+        if cached is not None:
+            return cached
         user_id = await self.retry(
-            lambda: self._fetch_user_id(),
+            lambda: self._fetch_user_id(token),
             retry_on=WEBMASTER_RETRYABLE,
         )
-        self._user_id = user_id
+        self._user_ids[token] = user_id
         return user_id
 
-    async def _fetch_user_id(self) -> int:
+    async def _fetch_user_id(self, token: str) -> int:
         """GET /v4/user — идентификатор владельца OAuth-токена."""
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
                 response = await client.get(
                     self.user_url,
-                    headers={"Authorization": f"OAuth {self.oauth_token}"},
+                    headers={"Authorization": f"OAuth {token}"},
                 )
         except httpx.HTTPError as exc:
             self.logger.error(
@@ -219,7 +230,7 @@ class WebmasterCollector(BaseCollector):
             raise WebmasterApiError(f"Вебмастер: некорректный user_id в ответе: {payload!r}")
         return int(user_id_value)
 
-    async def _fetch_queries(self, user_id: int, host_id: str) -> list[QueryStats]:
+    async def _fetch_queries(self, user_id: int, host_id: str, token: str) -> list[QueryStats]:
         """GET .../search-queries/popular — топ запросов сайта за последнюю неделю."""
         url = f"{self.api_base}/user/{user_id}/hosts/{host_id}/search-queries/popular"
         try:
@@ -232,7 +243,7 @@ class WebmasterCollector(BaseCollector):
                         "device_type_indicator": "ALL",
                         "limit": self.top_queries,
                     },
-                    headers={"Authorization": f"OAuth {self.oauth_token}"},
+                    headers={"Authorization": f"OAuth {token}"},
                 )
         except httpx.HTTPError as exc:
             self.logger.error(
@@ -329,7 +340,7 @@ class WebmasterCollector(BaseCollector):
             )
 
     async def _write_daily_history(
-        self, user_id: int, host_id: str, domain: str, rows: list[QueryStats]
+        self, user_id: int, host_id: str, domain: str, rows: list[QueryStats], token: str
     ) -> int:
         """Дневная история каждого запроса топа (per-query, ADR-008 D1).
 
@@ -343,7 +354,9 @@ class WebmasterCollector(BaseCollector):
         daily_rows: list[DailyRow] = []
         for row in rows:
             try:
-                history = await self._fetch_history_with_retry(user_id, host_id, row.query_id)
+                history = await self._fetch_history_with_retry(
+                    user_id, host_id, row.query_id, token
+                )
             except WebmasterNotFoundError as exc:
                 # 404 здесь может быть только QUERY_ID_NOT_FOUND: host-уровень
                 # (HOST_NOT_VERIFIED и т.п.) уже отсечён запросом /popular,
@@ -371,11 +384,11 @@ class WebmasterCollector(BaseCollector):
         return points
 
     async def _fetch_history_with_retry(
-        self, user_id: int, host_id: str, query_id: str
+        self, user_id: int, host_id: str, query_id: str, token: str
     ) -> dict[str, DailyValue]:
         """История одного запроса с ретраями (единый паттерн коллектора)."""
         return await self.retry(
-            lambda: self._fetch_query_history(user_id, host_id, query_id),
+            lambda: self._fetch_query_history(user_id, host_id, query_id, token),
             retry_on=WEBMASTER_RETRYABLE,
         )
 
@@ -429,7 +442,7 @@ class WebmasterCollector(BaseCollector):
         return date_from, date_to
 
     async def _fetch_query_history(
-        self, user_id: int, host_id: str, query_id: str
+        self, user_id: int, host_id: str, query_id: str, token: str
     ) -> dict[str, DailyValue]:
         """GET .../search-queries/{query_id}/history — дневные показатели запроса.
 
@@ -448,7 +461,7 @@ class WebmasterCollector(BaseCollector):
                         "date_from": date_from,
                         "date_to": date_to,
                     },
-                    headers={"Authorization": f"OAuth {self.oauth_token}"},
+                    headers={"Authorization": f"OAuth {token}"},
                 )
         except httpx.HTTPError as exc:
             self.logger.error(

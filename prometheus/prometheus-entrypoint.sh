@@ -1,26 +1,20 @@
 #!/bin/sh
-# Entrypoint Prometheus (ЭПИК-9, ADR-007 D3).
-# Подставляет SITE_METRICS_API_KEY из env в шаблон конфига при старте:
-# ключ остаётся только в env (.env хоста, chmod 600) и памяти контейнера.
+# Entrypoint Prometheus.
+# ADR-010: ключи X-Monitoring-Key сайтов больше не нужны Prometheus —
+# скрейпы site-* идут через relay приложения (app:8088), секретов в
+# конфиге/ env контейнера нет. Скрипт сохраняет флаги запуска.
 set -eu
 
 TEMPLATE="/etc/prometheus/prometheus.yml.tmpl"
 TARGET="/etc/prometheus/prometheus.yml"
 
-API_KEY="${SITE_METRICS_API_KEY:-}"
+cp "$TEMPLATE" "$TARGET"
 
-# Ключ не задан → заглушка: контейнер стартует, скрейпы site-* получают
-# 403 от nginx сайта → up=0, SiteMetricsEndpointDown в pending (как ADR-006 §3).
-[ -n "$API_KEY" ] || API_KEY="NOT_CONFIGURED"
-
-# esc-последок для sed (ключ теоретически содержит '/', ':' безопасен)
-ESCAPED_KEY=$(printf '%s' "$API_KEY" | sed 's/[&/\]/\\&/g')
-
-sed -e "s/__SITE_METRICS_API_KEY__/${ESCAPED_KEY}/g" "$TEMPLATE" > "$TARGET"
-
-# ADR-008: retention 400d — годовые срезы топов запросов; "$@" пробрасывает
+# Ретеншн задаётся в КОНФИГЕ (storage.tsdb.retention) — там он применяется
+# ДО открытия TSDB (main.go), тогда как флаг --storage.tsdb.retention.time в
+# 3.x deprecated и при uses-сравнении блоков vs ретеншн даёт баг удаления
+# backfill-блоков (ЧТЗ_Вебмастер_Backfill_по_дням); "$@" пробрасывает
 # command из docker-compose (будущие флаги без правки скрипта).
 exec prometheus \
   --config.file="$TARGET" \
-  --storage.tsdb.retention.time=400d \
   "$@"

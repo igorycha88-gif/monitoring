@@ -33,8 +33,8 @@ def test_node_exporter_job_uses_http_sd() -> None:
 SITE_METRICS_KINDS = ("tracking", "content", "node", "postgres")
 
 
-def test_site_metrics_jobs_use_http_sd_and_key_header() -> None:
-    """ЭПИК-9: 4 job'а site-* скрейпят эндпоинты сайтов с X-Monitoring-Key."""
+def test_site_metrics_jobs_use_http_sd_without_secrets() -> None:
+    """ЭПИК-9/ADR-010: 4 job'а site-* скрейпят relay приложения без ключей."""
     config = load_config()
     for kind in SITE_METRICS_KINDS:
         job = jobs(config)[f"site-{kind}"]
@@ -42,16 +42,22 @@ def test_site_metrics_jobs_use_http_sd_and_key_header() -> None:
         assert len(sd_configs) == 1, kind
         assert sd_configs[0]["url"] == f"http://app:8088/api/v1/sd/site-metrics/{kind}", kind
         assert sd_configs[0]["refresh_interval"] == "60s", kind
-        header = job["http_headers"]["X-Monitoring-Key"]
-        # В конфиге — только плейсхолдер; реальный ключ подставляет entrypoint
-        assert header == {"values": ["__SITE_METRICS_API_KEY__"]}, kind
+        # Ключ подставляет relay приложения — в конфиге Prometheus секретов нет
+        assert "http_headers" not in job, kind
+        # Запас поверх таймаута relay (10 с)
+        assert job["scrape_timeout"] == "12s", kind
 
 
 def test_prometheus_config_no_real_key() -> None:
-    """Секрет не должен попадать в конфиг-шаблон (ADR-007 D3)."""
+    """ADR-010: секреты не попадают в конфиг Prometheus (скрейп через relay)."""
     content = PROMETHEUS_CONFIG.read_text(encoding="utf-8")
-    assert "__SITE_METRICS_API_KEY__" in content
-    assert "X-Monitoring-Key" in content
+    assert "__SITE_METRICS_API_KEY__" not in content
+    for job in load_config()["scrape_configs"]:
+        assert "http_headers" not in job, job["job_name"]
+    entrypoint = (
+        Path(__file__).resolve().parent.parent / "prometheus" / "prometheus-entrypoint.sh"
+    ).read_text(encoding="utf-8")
+    assert "SITE_METRICS_API_KEY" not in entrypoint
 
 
 def test_prometheus_retention_supports_year_slices() -> None:

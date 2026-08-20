@@ -8,7 +8,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from app.api.v1 import health, sd, sites
+from app.api.v1 import health, relay, sd, sites
 from app.config import get_settings
 from app.logging import get_logger, setup_logging
 from app.sites import SiteConfig, load_sites
@@ -66,9 +66,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 webmaster_storage = None
         else:
             logger.info("storage_disabled", reason="empty_webmaster_db_path")
+        webmaster_oauth_tokens = {
+            site.domain: settings.webmaster_token(site.domain)
+            for site in _sites_with_webmaster(sites_list)
+        }
+        without_token = sorted(
+            domain for domain, token in webmaster_oauth_tokens.items() if not token
+        )
+        if without_token:
+            logger.warning(
+                "webmaster_oauth_tokens_empty",
+                reason="персайтный токен и YANDEX_WEBMASTER_OAUTH_TOKEN не заданы — "
+                "сбор сайта завершится ошибкой",
+                sites=without_token,
+            )
         webmaster_collector = WebmasterCollector(
             sites_list,
-            oauth_token=settings.yandex_webmaster_oauth_token,
+            oauth_tokens=webmaster_oauth_tokens,
             timeout_seconds=settings.webmaster_timeout_seconds,
             top_queries=settings.webmaster_top_queries,
             history_days=settings.webmaster_history_days,
@@ -83,15 +97,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     else:
         logger.info("webmaster_collector_skipped", reason="no_hosts")
     if _sites_with_metrics_urls(sites_list):
-        if not settings.site_metrics_api_key:
+        api_keys = {
+            site.domain: settings.site_metrics_key(site.domain)
+            for site in _sites_with_metrics_urls(sites_list)
+        }
+        without_key = sorted(domain for domain, key in api_keys.items() if not key)
+        if without_key:
             logger.warning(
-                "site_metrics_api_key_empty",
-                reason="SITE_METRICS_API_KEY не задан — эндпоинты ответят 403, up будет 0",
+                "site_metrics_api_keys_empty",
+                reason="персайтный ключ и SITE_METRICS_API_KEY не заданы — эндпоинты ответят 403",
+                sites=without_key,
             )
         site_metrics_collector = SiteMetricsCollector(
             sites_list,
             timeout_seconds=settings.site_metrics_timeout_seconds,
-            api_key=settings.site_metrics_api_key,
+            api_keys=api_keys,
         )
         site_metrics_collector.register(scheduler, settings.site_metrics_interval_seconds)
         collectors.append("site-metrics")
@@ -135,6 +155,7 @@ def create_app() -> FastAPI:
     application.include_router(health.router)
     application.include_router(sites.router, prefix="/api/v1")
     application.include_router(sd.router, prefix="/api/v1")
+    application.include_router(relay.router, prefix="/api/v1")
 
     @application.middleware("http")
     async def log_requests(
@@ -142,7 +163,10 @@ def create_app() -> FastAPI:
     ) -> Response:
         started = time.perf_counter()
         response = await call_next(request)
-        if request.url.path.rstrip("/") != "/metrics":
+        # /metrics и relay-скрейпы (каждые 15 с × kinds × сайты) не логируются
+        # на INFO — иначе шум; relay пишет событие relay_scrape на debug
+        path = request.url.path.rstrip("/")
+        if path != "/metrics" and not path.startswith("/api/v1/relay/"):
             logger.info(
                 "http_request",
                 method=request.method,

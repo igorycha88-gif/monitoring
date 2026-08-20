@@ -180,19 +180,17 @@ class TestEntrypoint:
 
 
 class TestPrometheusEntrypoint:
-    """ЭПИК-9 (ADR-007 D3): подстановка ключа в конфиг Prometheus."""
+    """ADR-010: Prometheus скрейпит site-* через relay — секретов не получает."""
 
     PROMETHEUS_ENTRYPOINT_SH = PROJECT_ROOT / "prometheus" / "prometheus-entrypoint.sh"
 
-    def test_substitutes_key_placeholder(self) -> None:
+    def test_no_key_substitution(self) -> None:
         content = self.PROMETHEUS_ENTRYPOINT_SH.read_text(encoding="utf-8")
-        assert "__SITE_METRICS_API_KEY__" in content
-        assert "SITE_METRICS_API_KEY" in content
+        assert "SITE_METRICS_API_KEY" not in content
         assert "exec prometheus" in content
 
-    def test_fallback_when_key_missing(self) -> None:
+    def test_retention_and_args_passthrough(self) -> None:
         content = self.PROMETHEUS_ENTRYPOINT_SH.read_text(encoding="utf-8")
-        assert "NOT_CONFIGURED" in content
         # ADR-008: retention поднят с 90d до 400d (годовые срезы)
         assert "--storage.tsdb.retention.time=400d" in content
 
@@ -228,10 +226,12 @@ class TestComposeWiring:
     def test_prometheus_depends_on_alertmanager(self) -> None:
         assert "alertmanager" in self.load()["prometheus"]["depends_on"]
 
-    def test_prometheus_gets_site_metrics_key_from_env(self) -> None:
-        """ЭПИК-9: ключ уходит в контейнер env'ом, не в конфиге."""
+    def test_prometheus_gets_no_secrets(self) -> None:
+        """ADR-010: скрейпы site-* через relay приложения — Prometheus без ключей."""
         prometheus = self.load()["prometheus"]
-        assert "SITE_METRICS_API_KEY" in prometheus["environment"]
+        assert "environment" not in prometheus or "SITE_METRICS_API_KEY" not in (
+            prometheus.get("environment") or {}
+        )
         assert prometheus["entrypoint"] == [
             "/bin/sh",
             "/etc/prometheus/prometheus-entrypoint.sh",

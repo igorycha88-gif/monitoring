@@ -15,7 +15,8 @@
 │  │  ├── /metrics       — prometheus_client       │          │
 │  │  ├── /api/v1/sites  — список сайтов           │          │
 │  │  ├── /api/v1/sd/node-exporter — HTTP SD [ЭПИК-6]
-│  │  ├── /api/v1/sd/site-metrics/{kind} — HTTP SD [ЭПИК-9]
+│  │  ├── /api/v1/sd/site-metrics/{kind} — HTTP SD (relay-таргеты) [ЭПИК-9, ADR-010]
+│  │  ├── /api/v1/relay/site-metrics/{kind}/{site} — proxy с персайтным ключом [ADR-010]
 │  │  └── APScheduler    — расписание коллекторов  │          │
 │  │       ├── collectors/uptime.py    [ЭПИК-1]    │──▶ HTTP/SSL сайтов
 │  │       ├── collectors/metrika.py   [ЭПИК-2]    │──▶ Яндекс.Метрика API
@@ -26,10 +27,10 @@
 │  ┌──────────────────────▼────────────────────────┐          │
 │  │ Prometheus (127.0.0.1:9091)                   │          │
 │  │   ├── http_sd: /api/v1/sd/node-exporter [ЭПИК-6]
-│  │   ├── http_sd: /api/v1/sd/site-metrics/{kind} + X-Monitoring-Key [ЭПИК-9]
+│  │   ├── http_sd: /api/v1/sd/site-metrics/{kind} → relay app [ЭПИК-9, ADR-010]
 │  │   ├── rules: /etc/prometheus/alerts.yml [ЭПИК-7]
 │  │   └──▶ node_exporter целей (лейбл site из SD) [ЭПИК-6]
-│  │   └──▶ jobs site-*: метрики сайтов (443, ключ) [ЭПИК-9]
+│  │   └──▶ jobs site-*: relay app:8088 (без секретов; ключ — relay) [ЭПИК-9]
 │  │   │ firing alerts [ЭПИК-7]                    │          │
 │  └───┼──────────────────┬────────────────────────┘          │
 │      ▼                  │ datasource                        │
@@ -69,6 +70,7 @@ monitoring/
 │   └── api/v1/
 │       ├── health.py        # GET /health
 │       ├── sites.py         # GET /api/v1/sites
+│       ├── relay.py         # GET /api/v1/relay/site-metrics/{kind}/{site} [ADR-010]
 │       └── sd.py            # GET /api/v1/sd/node-exporter [ЭПИК-6], /sd/site-metrics/{kind} [ЭПИК-9]
 ├── collectors/
 │   ├── base.py              # BaseCollector: метрики, логи, ретраи, расписание, parallel
@@ -86,8 +88,8 @@ monitoring/
 │   │   └── webmaster.json      # «Вебмастер: поиск по сайту» — единая страница (5 панелей: динамика + топы) [ADR-008, ЧТЗ_Дашборд_Вебмастер_Единый]
 │   └── provisioning/        # datasources (uid: prometheus) + dashboards
 ├── prometheus/
-│   ├── prometheus.yml       # scrape (app, node-exporter SD, site-* SD) + rules + alerting
-│   ├── prometheus-entrypoint.sh # подстановка SITE_METRICS_API_KEY в конфиг [ЭПИК-9]
+│   ├── prometheus.yml       # scrape (app, node-exporter SD, site-* SD через relay) + rules + alerting
+│   ├── prometheus-entrypoint.sh # копия шаблона конфига + retention 400d (секретов нет, ADR-010)
 │   ├── alerts.yml           # правила алертов [ЭПИК-7, ADR-006; ЭПИК-9]
 │   ├── alertmanager.yml     # конфиг Alertmanager (шаблон с подстановкой) [ЭПИК-7]
 │   └── alertmanager-entrypoint.sh
@@ -158,20 +160,23 @@ monitoring/
 - В дашбордах `rate()` разрешён ТОЛЬКО для `node_*` (counter);
   метрики проекта `monitoring_*` — gauge, без rate()/increase()
 
-### Метрики сайтов за X-Monitoring-Key (ЭПИК-9, ADR-007)
+### Метрики сайтов за X-Monitoring-Key (ЭПИК-9, ADR-007/ADR-010)
 - Сайты отдают метрики через свой nginx (443) по путям
   `/metrics/{tracking,content,node,postgres}` с заголовком
   `X-Monitoring-Key`; конфиг сайта — поле `metrics_urls` в sites.yml
   (только https, kinds из whitelist)
+- Ключи — ПЕРСАЙТНЫЕ (ADR-010): `.env` → `SITE_METRICS_API_KEYS`
+  (JSON `{"<домен>": "<ключ>"}`); `SITE_METRICS_API_KEY` — fallback.
+  Резолв: `Settings.site_metrics_key(domain)`
 - Скрейп: Prometheus jobs `site-{kind}` через HTTP SD
-  `GET /api/v1/sd/site-metrics/{kind}` (лейбл `site` из SD);
-  ключ — env `SITE_METRICS_API_KEY` (.env), подставляется
-  `prometheus-entrypoint.sh` (плейсхолдер `__SITE_METRICS_API_KEY__`);
-  пустой ключ → заглушка NOT_CONFIGURED → скрейпы 403 → up=0
+  `GET /api/v1/sd/site-metrics/{kind}` → relay-таргеты `app:8088`
+  (`__metrics_path__=/api/v1/relay/site-metrics/{kind}/{домен}`); relay
+  приложения проксирует запрос к сайту с ключом сайта — Prometheus
+  скрейпит БЕЗ секретов; не-2xx/сбой → 502 → up=0
 - Health-контроль эндпоинтов: `SiteMetricsCollector` (source=`site-metrics`,
   gauge `monitoring_site_metrics_up/response_code/latency_seconds`
-  `{site,kind}`); философия ADR-002: 403/404/5xx/сеть — данные (up=0),
-  не ошибка коллектора; цикл 60 с — сам ретрай
+  `{site,kind}`, ключ — персайтный); философия ADR-002: 403/404/5xx/сеть —
+  данные (up=0), не ошибка коллектора; цикл 60 с — сам ретрай
 - Бизнес-метрики сайта (`business_*`) — gauge, считаются на стороне сайта
   из БД (окна 24ч/1ч), пересчёт раз в 60 с; алерт SiteNoTraffic —
   только `== 0` и `offset`-сравнения, без rate()

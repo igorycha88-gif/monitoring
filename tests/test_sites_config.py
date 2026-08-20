@@ -36,6 +36,24 @@ def test_domain_normalized_to_lower(tmp_path: Path) -> None:
     assert sites[0].domain == "example.com"
 
 
+def test_idn_domain_accepted(tmp_path: Path) -> None:
+    """IDN-домен (эвакуация.online) — валиден, сохраняется как есть (unicode)."""
+    sites = load_sites(
+        write_config(
+            tmp_path,
+            "sites:\n"
+            "  - domain: эвакуация.online\n"
+            "    metrika_counter_id: 111456265\n"
+            "    metrics_urls:\n"
+            "      tracking: https://эвакуация.online/metrics/tracking\n",
+        )
+    )
+    assert sites[0].domain == "эвакуация.online"
+    assert sites[0].metrika_counter_id == 111456265
+    assert sites[0].metrics_urls is not None
+    assert sites[0].metrics_urls["tracking"] == "https://эвакуация.online/metrics/tracking"
+
+
 def test_file_missing(tmp_path: Path) -> None:
     with pytest.raises(SiteConfigError, match="не найден"):
         load_sites(tmp_path / "missing.yml")

@@ -16,6 +16,7 @@ from collectors.webmaster import (
     WEBMASTER_API_BASE,
     YANDEX_TZ,
     WebmasterCollector,
+    WebmasterConfigError,
     normalize_query,
 )
 
@@ -35,7 +36,7 @@ def make_collector(
         sites.append(SiteConfig(domain=extra_domain))
     collector = WebmasterCollector(
         sites,
-        oauth_token=token,
+        oauth_tokens={domain: token},
         timeout_seconds=1.0,
         top_queries=top_queries,
         history_days=history_days,
@@ -985,7 +986,7 @@ def make_storage_collector(storage: FakeStorage, domain: str) -> WebmasterCollec
     sites = [SiteConfig(domain=domain, webmaster_host_id=HOST_ID)]
     collector = WebmasterCollector(
         sites,
-        oauth_token="test-token",
+        oauth_tokens={domain: "test-token"},
         timeout_seconds=1.0,
         storage=storage,  # type: ignore[arg-type]
     )
@@ -1074,3 +1075,103 @@ async def test_history_without_complete_points_skips_daily_storage() -> None:
     assert result["sites_ok"] == 1
     assert len(storage.weekly_calls) == 1  # недельный срез пишется
     assert storage.daily_calls == []  # дневной — нет
+
+
+# --- Персайтные OAuth-токены (ЧТЗ_Вебмастер_Персайтные_токены) ---
+
+
+@respx.mock
+async def test_per_site_tokens_two_accounts() -> None:
+    """Два сайта из двух аккаунтов: каждый запрос идёт с токеном своего сайта,
+    user_id кэшируется на токен (второй цикл — без новых /user)."""
+    host_a = "https:a.com:443"
+    host_b = "https:b.com:443"
+    token_a, token_b = "token-a", "token-b"
+
+    def user_side_effect(request: httpx.Request) -> httpx.Response:
+        auth = request.headers.get("Authorization", "")
+        if auth == f"OAuth {token_a}":
+            return httpx.Response(200, json={"user_id": 11})
+        return httpx.Response(200, json={"user_id": 22})
+
+    user_route = respx.get(f"{WEBMASTER_API_BASE}/user").mock(side_effect=user_side_effect)
+    popular_a = respx.get(
+        f"{WEBMASTER_API_BASE}/user/11/hosts/{host_a}/search-queries/popular"
+    ).mock(return_value=popular_response([QUERY_FULL]))
+    popular_b = respx.get(
+        f"{WEBMASTER_API_BASE}/user/22/hosts/{host_b}/search-queries/popular"
+    ).mock(return_value=popular_response([QUERY_FULL]))
+    mock_history()
+
+    sites = [
+        SiteConfig(domain="a.com", webmaster_host_id=host_a),
+        SiteConfig(domain="b.com", webmaster_host_id=host_b),
+    ]
+    collector = WebmasterCollector(
+        sites,
+        oauth_tokens={"a.com": token_a, "b.com": token_b},
+        timeout_seconds=1.0,
+    )
+    collector.retry_base_delay = 0
+
+    with capture_logs() as captured:
+        result = await collector.run_once()
+        result2 = await collector.run_once()
+
+    assert result["sites_ok"] == 2
+    assert result2["sites_ok"] == 2
+    # Каждый popular-запрос — с токеном своего сайта
+    auth_a = [call.request.headers.get("Authorization") for call in popular_a.calls]
+    auth_b = [call.request.headers.get("Authorization") for call in popular_b.calls]
+    assert set(auth_a) == {f"OAuth {token_a}"}
+    assert set(auth_b) == {f"OAuth {token_b}"}
+    # user_id кэшируется на токен: 2 токена → 2 вызова /user за два цикла
+    assert user_route.call_count == 2
+    # Метрики обоих сайтов записаны
+    metrics = generate_latest().decode()
+    assert 'monitoring_collector_success{site="a.com",source="webmaster"} 1.0' in metrics
+    assert 'monitoring_collector_success{site="b.com",source="webmaster"} 1.0' in metrics
+    # Значения токенов не попадают в логи
+    assert not any(token_a in str(entry) or token_b in str(entry) for entry in captured)
+
+
+@respx.mock
+async def test_missing_site_token_is_site_error_not_collector() -> None:
+    """Пустой токен сайта — пер-сайтовая ошибка (WebmasterConfigError),
+    коллектор жив, другие сайты собираются."""
+    mock_user()
+    respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
+    mock_history()
+
+    sites = [
+        SiteConfig(domain="no-token.com", webmaster_host_id=HOST_ID),
+        SiteConfig(domain="w.com", webmaster_host_id=HOST_ID),
+    ]
+    collector = WebmasterCollector(
+        sites,
+        oauth_tokens={"no-token.com": "", "w.com": "test-token"},
+        timeout_seconds=1.0,
+    )
+    collector.retry_base_delay = 0
+
+    with capture_logs() as captured:
+        result = await collector.run_once()
+
+    assert result["sites_ok"] == 1  # w.com собран, no-token.com — нет
+    site_errors = [entry for entry in captured if entry.get("event") == "collector_site_error"]
+    assert site_errors and site_errors[0]["site"] == "no-token.com"
+    assert site_errors[0]["error_type"] == "WebmasterConfigError"
+    metrics = generate_latest().decode()
+    assert 'monitoring_collector_errors_total{site="no-token.com",source="webmaster"}' in metrics
+    assert 'monitoring_collector_success{site="w.com",source="webmaster"} 1.0' in metrics
+
+
+async def test_missing_site_token_raises_config_error() -> None:
+    """Единичный collect_site без токена поднимает WebmasterConfigError."""
+    collector = WebmasterCollector(
+        [SiteConfig(domain="x.com", webmaster_host_id=HOST_ID)],
+        oauth_tokens={},
+        timeout_seconds=1.0,
+    )
+    with pytest.raises(WebmasterConfigError):
+        await collector.collect_site(collector.sites[0])

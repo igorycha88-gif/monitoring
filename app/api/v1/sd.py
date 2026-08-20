@@ -1,4 +1,4 @@
-"""HTTP SD для Prometheus: цели node_exporter и метрик сайтов (ЭПИК-6, ЭПИК-9)."""
+"""HTTP SD для Prometheus: цели node_exporter и метрик сайтов (ЭПИК-6, ЭПИК-9, ADR-010)."""
 
 from typing import Annotated
 from urllib.parse import urlsplit
@@ -13,6 +13,18 @@ router = APIRouter(prefix="/sd", tags=["service-discovery"])
 logger = get_logger("api.sd")
 
 DEFAULT_NODE_EXPORTER_PORT = 9100
+# ADR-010 D3: таргет relay (само приложение) для job'ов site-*
+RELAY_TARGET = "app:8088"
+RELAY_PATH_PREFIX = "/api/v1/relay/site-metrics"
+
+
+def relay_path(kind: str, domain: str) -> str:
+    """__metrics_path__ relay-таргета: домен — сырой unicode (ADR-010 D3).
+
+    percent-кодирование UTF-8 выполняет Prometheus при построении URI:
+    предзакодированное значение он кодирует повторно (% → %25).
+    """
+    return f"{RELAY_PATH_PREFIX}/{kind}/{domain}"
 
 
 def build_target(url: str, default_port: int = DEFAULT_NODE_EXPORTER_PORT) -> str:
@@ -68,10 +80,11 @@ async def discover_site_metrics(
     kind: str,
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> list[dict[str, object]]:
-    """HTTP SD-ответ Prometheus (jobs site-*): эндпоинты метрик сайтов (ADR-007 D3).
+    """HTTP SD-ответ Prometheus (jobs site-*): relay-таргеты метрик сайтов (ADR-010 D3).
 
     kinds: tracking | content | node | postgres (whitelist из app.sites).
-    Таргеты вида host:443 с __scheme__=https и __metrics_path__ из URL.
+    Таргет — relay приложения (app:8088): ключ сайта подставляет relay,
+    Prometheus скрейпит без заголовков. Лейбл site — из поля domain.
     """
     if kind not in SITE_METRICS_KINDS:
         raise HTTPException(
@@ -85,13 +98,15 @@ async def discover_site_metrics(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     groups: list[dict[str, object]] = []
     for site in sites:
-        url = (site.metrics_urls or {}).get(kind)
-        if url is None:
+        if (site.metrics_urls or {}).get(kind) is None:
             continue
         groups.append(
             {
-                "targets": [build_target(url, default_port=443)],
-                "labels": {"site": site.domain, **url_labels(url)},
+                "targets": [RELAY_TARGET],
+                "labels": {
+                    "site": site.domain,
+                    "__metrics_path__": relay_path(kind, site.domain),
+                },
             }
         )
     logger.info("sd_targets_served", job=f"site-{kind}", targets=len(groups))

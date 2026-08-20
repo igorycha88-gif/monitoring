@@ -237,6 +237,23 @@ def test_site_business_panels_use_business_and_site_metrics() -> None:
     assert "monitoring_site_metrics_latency_seconds" in joined
 
 
+def test_site_business_metrics_deduplicated() -> None:
+    """Регрессия задвоения серий после смены таргета скрейпа (ADR-007 → ADR-010).
+
+    Селекторы business_* / monitoring_site_metrics_* не должны возвращать
+    серии с лейблами идентичности таргета (job/instance): при смене пути
+    скрейпа (прямой → relay) старые и новые серии различаются только
+    job/instance и задваиваются в каждой панели. Требуется агрегация
+    max by (...)/min(...), устраняющая эти лейблы.
+    """
+    for expr in panel_exprs(load_dashboard("site-business.json")):
+        if not ("business_" in expr or "monitoring_site_metrics_" in expr):
+            continue
+        assert "max by (" in expr or "min(" in expr, (
+            f"site-business: expr без дедуплицирующей агрегации: {expr!r}"
+        )
+
+
 def test_webmaster_unified_structure() -> None:
     """Единый дашборд Вебмастера: все панели на одной странице.
 

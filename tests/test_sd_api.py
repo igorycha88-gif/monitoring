@@ -119,11 +119,38 @@ def test_site_metrics_sd_targets_and_labels(
     groups = response.json()
     assert groups == [
         {
-            "targets": ["da-dryclean.ru:443"],
+            "targets": ["app:8088"],
             "labels": {
                 "site": "da-dryclean.ru",
-                "__scheme__": "https",
-                "__metrics_path__": "/metrics/tracking",
+                "__metrics_path__": "/api/v1/relay/site-metrics/tracking/da-dryclean.ru",
+            },
+        }
+    ]
+
+
+def test_site_metrics_sd_idn_domain_percent_encoded(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR-010 D3: IDN-домен в пути — percent-encoded, лейбл site — читаемый."""
+    use_sites_file(
+        tmp_path,
+        "sites:\n"
+        "  - domain: эвакуация.online\n"
+        "    metrics_urls:\n"
+        "      tracking: https://эвакуация.online/metrics/tracking\n",
+        monkeypatch,
+    )
+    response = client.get("/api/v1/sd/site-metrics/tracking")
+    assert response.status_code == 200
+    groups = response.json()
+    assert groups == [
+        {
+            "targets": ["app:8088"],
+            "labels": {
+                "site": "эвакуация.online",
+                # Домен — сырой unicode: percent-кодирование UTF-8 делает
+                # Prometheus (предзакодированное значение он кодирует повторно)
+                "__metrics_path__": "/api/v1/relay/site-metrics/tracking/эвакуация.online",
             },
         }
     ]

@@ -2,6 +2,17 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# ADR-008: ретеншн по РАЗМЕРУ (не по времени). В Prometheus 3.14
+# BeyondTimeRetention сравнивает даты блоков (в микросекундах) с
+# retentionDuration (в миллисекундах) → эффективный срок хранения в 1000 раз
+# меньше заданного и backfill-блоки удалялись при старте как "obsolete".
+# Отключение time-ретеншна (RetentionDuration=0) и большой лимит по размеру
+# полностью обходят баг; наши блоки крошечные (ЧТЗ_Вебмастер_Backfill_по_дням).
+storage:
+  tsdb:
+    retention:
+      size: 20GB
+
 rule_files:
   # ЭПИК-7: правила алертов (ADR-006)
   - /etc/prometheus/alerts.yml
@@ -28,38 +39,30 @@ scrape_configs:
       - url: http://app:8088/api/v1/sd/node-exporter
         refresh_interval: 60s
 
-  # ЭПИК-9 (ADR-007): метрики сайтов за X-Monitoring-key (nginx 443).
-  # Цели — из поля metrics_urls в config/sites.yml (HTTP SD, refresh 60s).
-  # Значение ключа подставляет prometheus-entrypoint.sh из env
-  # SITE_METRICS_API_KEY (в файле — только плейсхолдер).
+  # ЭПИК-9 (ADR-010): метрики сайтов через relay приложения (app:8088).
+  # Цели — из поля metrics_urls в config/sites.yml (HTTP SD, refresh 60s);
+  # ключ X-Monitoring-Key сайта подставляет relay — Prometheus скрейпит
+  # без секретов. scrape_timeout 12s — запас поверх таймаута relay (10s).
   - job_name: site-tracking
+    scrape_timeout: 12s
     http_sd_configs:
       - url: http://app:8088/api/v1/sd/site-metrics/tracking
         refresh_interval: 60s
-    http_headers:
-      X-Monitoring-Key:
-        values: ["__SITE_METRICS_API_KEY__"]
 
   - job_name: site-content
+    scrape_timeout: 12s
     http_sd_configs:
       - url: http://app:8088/api/v1/sd/site-metrics/content
         refresh_interval: 60s
-    http_headers:
-      X-Monitoring-Key:
-        values: ["__SITE_METRICS_API_KEY__"]
 
   - job_name: site-node
+    scrape_timeout: 12s
     http_sd_configs:
       - url: http://app:8088/api/v1/sd/site-metrics/node
         refresh_interval: 60s
-    http_headers:
-      X-Monitoring-Key:
-        values: ["__SITE_METRICS_API_KEY__"]
 
   - job_name: site-postgres
+    scrape_timeout: 12s
     http_sd_configs:
       - url: http://app:8088/api/v1/sd/site-metrics/postgres
         refresh_interval: 60s
-    http_headers:
-      X-Monitoring-Key:
-        values: ["__SITE_METRICS_API_KEY__"]

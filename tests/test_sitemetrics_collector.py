@@ -24,7 +24,7 @@ def make_collector(urls: dict[str, str] | None = FULL_URLS) -> SiteMetricsCollec
     return SiteMetricsCollector(
         [SiteConfig(domain=SITE, metrics_urls=urls)],
         timeout_seconds=1.0,
-        api_key=API_KEY,
+        api_keys={SITE: API_KEY},
     )
 
 
@@ -59,6 +59,42 @@ async def test_api_key_header_sent() -> None:
 
     request = route.calls.last.request
     assert request.headers.get(MONITORING_KEY_HEADER) == API_KEY
+
+
+@respx.mock
+async def test_per_site_keys_used() -> None:
+    """ADR-010 D5: каждый сайт получает СВОЙ ключ в заголовке."""
+    site_a, site_b = "a.test", "b.test"
+    route_a = respx.get("https://a.test/metrics/tracking").mock(return_value=httpx.Response(200))
+    route_b = respx.get("https://b.test/metrics/tracking").mock(return_value=httpx.Response(200))
+
+    collector = SiteMetricsCollector(
+        [
+            SiteConfig(domain=site_a, metrics_urls={"tracking": "https://a.test/metrics/tracking"}),
+            SiteConfig(domain=site_b, metrics_urls={"tracking": "https://b.test/metrics/tracking"}),
+        ],
+        timeout_seconds=1.0,
+        api_keys={site_a: "key-a", site_b: "key-b"},
+    )
+    await collector.run_once()
+
+    assert route_a.calls.last.request.headers.get(MONITORING_KEY_HEADER) == "key-a"
+    assert route_b.calls.last.request.headers.get(MONITORING_KEY_HEADER) == "key-b"
+
+
+@respx.mock
+async def test_site_without_key_sends_empty_header() -> None:
+    """Домен без ключа → пустой заголовок (сайт ответит 403 → up=0, данные)."""
+    route = respx.get(FULL_URLS["tracking"]).mock(return_value=httpx.Response(403))
+
+    collector = SiteMetricsCollector(
+        [SiteConfig(domain=SITE, metrics_urls={"tracking": FULL_URLS["tracking"]})],
+        timeout_seconds=1.0,
+        api_keys={},
+    )
+    await collector.run_once()
+
+    assert route.calls.last.request.headers.get(MONITORING_KEY_HEADER) == ""
 
 
 @pytest.mark.parametrize("code", [403, 404, 500, 503])
@@ -100,7 +136,7 @@ async def test_network_error_sets_code_zero() -> None:
 @respx.mock
 async def test_site_without_metrics_urls_yields_zero_points() -> None:
     collector = SiteMetricsCollector(
-        [SiteConfig(domain=SITE)], timeout_seconds=1.0, api_key=API_KEY
+        [SiteConfig(domain=SITE)], timeout_seconds=1.0, api_keys={SITE: API_KEY}
     )
 
     result = await collector.run_once()
