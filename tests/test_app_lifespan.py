@@ -116,6 +116,15 @@ def test_lifespan_registers_webmaster_collector(
         assert webmaster_registered[0]["sites"] == 1
         started = [entry for entry in captured if entry["event"] == "app_started"]
         assert "webmaster" in started[0]["collectors"]
+        # ADR-011: экспортёр рендера из БД запущен
+        export_started = [
+            entry for entry in captured if entry["event"] == "webmaster_export_started"
+        ]
+        assert export_started
+        export_stopped = [
+            entry for entry in captured if entry["event"] == "webmaster_export_stopped"
+        ]
+        assert export_stopped
         assert all("webmaster-token" not in str(entry) for entry in captured)
 
 

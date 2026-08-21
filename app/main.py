@@ -1,18 +1,20 @@
 """Точка входа FastAPI: маршруты, метрики, планировщик коллекторов."""
 
+import contextlib
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request, Response
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, generate_latest
 
 from app.api.v1 import health, relay, sd, sites
 from app.config import get_settings
 from app.logging import get_logger, setup_logging
 from app.sites import SiteConfig, load_sites
 from app.storage import WebmasterStorage
+from app.webmaster_export import WebmasterExporter, register_webmaster_exporter
 from collectors.metrika import MetrikaCollector
 from collectors.sitemetrics import SiteMetricsCollector
 from collectors.uptime import SSLCollector, UptimeCollector
@@ -29,6 +31,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     sites_list = load_sites(settings.sites_config_path)
     scheduler = AsyncIOScheduler(timezone="UTC")
     webmaster_storage: WebmasterStorage | None = None
+    webmaster_exporter: WebmasterExporter | None = None
     uptime_collector = UptimeCollector(
         sites_list,
         timeout_seconds=settings.uptime_timeout_seconds,
@@ -66,6 +69,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 webmaster_storage = None
         else:
             logger.info("storage_disabled", reason="empty_webmaster_db_path")
+        if webmaster_storage is not None:
+            # Рендер поисковых метрик из БД (ADR-011): register + фоновый
+            # поток обновления кэша; метрики доступны сразу после старта
+            webmaster_exporter = WebmasterExporter(
+                webmaster_storage,
+                render_days=settings.webmaster_render_days,
+                refresh_seconds=settings.webmaster_render_refresh_seconds,
+            )
+            register_webmaster_exporter(webmaster_exporter, REGISTRY)
+            webmaster_exporter.start()
+        else:
+            logger.warning(
+                "webmaster_export_skipped",
+                reason="storage_unavailable",
+            )
         webmaster_oauth_tokens = {
             site.domain: settings.webmaster_token(site.domain)
             for site in _sites_with_webmaster(sites_list)
@@ -129,6 +147,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         scheduler.shutdown(wait=False)
+        if webmaster_exporter is not None:
+            webmaster_exporter.stop()
+            with contextlib.suppress(KeyError):
+                REGISTRY.unregister(webmaster_exporter)
         if webmaster_storage is not None:
             webmaster_storage.close()
         logger.info("app_stopped")

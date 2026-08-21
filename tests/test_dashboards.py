@@ -8,6 +8,7 @@ from typing import Any
 from prometheus_client import Counter, Gauge
 
 from app import metrics
+from app.webmaster_export import METRIC_NAMES
 
 DASHBOARDS_DIR = Path(__file__).resolve().parent.parent / "grafana" / "dashboards"
 
@@ -18,10 +19,12 @@ DASHBOARD_NAMES = (
     "webmaster.json",
 )
 
-# Белый список собираем из реестра приложения (app/metrics.py),
-# чтобы тест не разошёлся с реальными метриками.
-KNOWN_METRICS: frozenset[str] = frozenset(
-    str(m._name) for m in vars(metrics).values() if isinstance(m, (Counter, Gauge))
+# Белый список собираем из реестра приложения (app/metrics.py) и имён
+# рендера из БД (app/webmaster_export.py — ADR-011), чтобы тест не
+# разошёлся с реальными метриками.
+KNOWN_METRICS: frozenset[str] = (
+    frozenset(str(m._name) for m in vars(metrics).values() if isinstance(m, (Counter, Gauge)))
+    | METRIC_NAMES
 )
 
 METRIC_RE = re.compile(r"monitoring_[a-z_]+")

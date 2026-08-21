@@ -9,14 +9,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from app.metrics import (
-    SEARCH_CLICKS_TOTAL,
-    SEARCH_DAILY_CLICKS,
-    SEARCH_DAILY_SHOWS,
-    SEARCH_POSITION,
-    SEARCH_SHOWS_TOTAL,
-    STORAGE_ERRORS_TOTAL,
-)
+from app.metrics import STORAGE_ERRORS_TOTAL
 from app.sites import SiteConfig
 from app.storage import DailyRow, WebmasterStorage, WeeklyRow
 from collectors.base import BaseCollector, RateLimitError
@@ -95,13 +88,16 @@ def _number(value: Any) -> float | None:
 
 
 class WebmasterCollector(BaseCollector):
-    """Сбор топа поисковых запросов (клики/показы/позиция) за последнюю неделю (ЭПИК-5, ADR-004).
+    """Сбор топа поисковых запросов в SQLite — единый источник метрик (ADR-011).
 
     Последовательный обход (лимиты API). Токен — на сайт (персайтные
     OAuth-токены: сайты верифицируются в разных аккаунтах Яндекса);
     user_id аккаунта разрешается лениво через GET /v4/user и кэшируется
     на токен. Сайты без webmaster_host_id пропускаются при инициализации:
     метрики collector_* для них не создаются.
+
+    Метрики Prometheus НЕ пишет — рендер /metrics из БД выполняет
+    WebmasterExporter (ADR-011 D1).
     """
 
     source = "webmaster"
@@ -143,11 +139,11 @@ class WebmasterCollector(BaseCollector):
         )
 
     async def collect_site(self, site: SiteConfig) -> int:
-        """Пишет метрики по топу запросов и дневной истории сайта.
+        """Пишет недельный и дневной срезы сайта в SQLite (ADR-011 D1).
 
-        Возвращает число записанных значений. Ошибка любого из двух запросов
-        (/popular, /history) — ошибка сайта (транзиентность покрывают ретраи,
-        ADR-008 D1).
+        Возвращает число записанных строк БД. Ошибка любого из двух
+        запросов (/popular, /history) — ошибка сайта (транзиентность
+        покрывают ретраи, ADR-008 D1).
         """
         host_id = site.webmaster_host_id
         if host_id is None:
@@ -163,32 +159,17 @@ class WebmasterCollector(BaseCollector):
             lambda: self._fetch_queries(user_id, host_id, token),
             retry_on=WEBMASTER_RETRYABLE,
         )
-        points = 0
-        for row in rows:
-            points += self._write_row(site.domain, row)
         await self._save_weekly_safe(site.domain, rows)
-        points += await self._write_daily_history(user_id, host_id, site.domain, rows, token)
+        points = len(rows) + await self._write_daily_history(
+            user_id, host_id, site.domain, rows, token
+        )
         self.logger.info(
             "webmaster_collect_done",
             site=site.domain,
             host_id=host_id,
             queries=len(rows),
-            points=points,
+            rows_written=points,
         )
-        return points
-
-    def _write_row(self, domain: str, row: QueryStats) -> int:
-        """Пишет доступные метрики запроса. Отсутствующий индикатор пропускается (не 0)."""
-        points = 0
-        if row.clicks is not None:
-            SEARCH_CLICKS_TOTAL.labels(site=domain, query=row.query).set(row.clicks)
-            points += 1
-        if row.shows is not None:
-            SEARCH_SHOWS_TOTAL.labels(site=domain, query=row.query).set(row.shows)
-            points += 1
-        if row.position is not None:
-            SEARCH_POSITION.labels(site=domain, query=row.query).set(row.position)
-            points += 1
         return points
 
     async def _get_user_id(self, token: str) -> int:
@@ -342,15 +323,15 @@ class WebmasterCollector(BaseCollector):
     async def _write_daily_history(
         self, user_id: int, host_id: str, domain: str, rows: list[QueryStats], token: str
     ) -> int:
-        """Дневная история каждого запроса топа (per-query, ADR-008 D1).
+        """Дневная история каждого запроса топа в SQLite (per-query, ADR-008 D1).
 
-        prometheus_client не умеет backfill: пишется только новейшая
-        завершённая (не сегодняшняя) точка каждого индикатора — ежедневный
-        запуск даёт 1 точку/день, TSDB накапливает ряды. 404 на конкретный
+        В штатном режиме пишется только новейшая завершённая (не сегодняшняя)
+        точка каждого индикатора — ежедневный запуск накапливает ряды в БД
+        (полное окно историй загружает backfill-скрипт). 404 на конкретный
         запрос (выпал из выдачи между /popular и /history) — пропуск, не
         ошибка сайта; остальные ошибки после ретраев — ошибка сайта.
+        Возвращает число строк, переданных в БД.
         """
-        points = 0
         daily_rows: list[DailyRow] = []
         for row in rows:
             try:
@@ -369,19 +350,26 @@ class WebmasterCollector(BaseCollector):
                     error=str(exc),
                 )
                 continue
-            points += self._write_daily_row(domain, row.query, history)
             daily_row = self._to_daily_row(row, history)
             if daily_row is not None:
                 daily_rows.append(daily_row)
+                self.logger.info(
+                    "webmaster_history_collected",
+                    site=domain,
+                    query=row.query,
+                    clicks=daily_row.clicks,
+                    shows=daily_row.shows,
+                    date=daily_row.date,
+                )
         await self._save_daily_safe(domain, daily_rows)
         self.logger.info(
             "webmaster_history_done",
             site=domain,
             host_id=host_id,
             queries=len(rows),
-            points=points,
+            rows_written=len(daily_rows),
         )
-        return points
+        return len(daily_rows)
 
     async def _fetch_history_with_retry(
         self, user_id: int, host_id: str, query_id: str, token: str
@@ -410,29 +398,6 @@ class WebmasterCollector(BaseCollector):
             clicks=None if clicks is None else clicks.value,
             shows=None if shows is None else shows.value,
         )
-
-    def _write_daily_row(self, domain: str, query: str, history: dict[str, DailyValue]) -> int:
-        """Пишет дневные метрики запроса. Отсутствующий индикатор пропускается (не 0)."""
-        written = 0
-        clicks = history.get("TOTAL_CLICKS")
-        if clicks is not None:
-            SEARCH_DAILY_CLICKS.labels(site=domain, query=query).set(clicks.value)
-            written += 1
-        shows = history.get("TOTAL_SHOWS")
-        if shows is not None:
-            SEARCH_DAILY_SHOWS.labels(site=domain, query=query).set(shows.value)
-            written += 1
-        if written:
-            self.logger.info(
-                "webmaster_history_written",
-                site=domain,
-                query=query,
-                clicks=None if clicks is None else clicks.value,
-                shows=None if shows is None else shows.value,
-                date=clicks.date if clicks is not None else shows.date if shows else None,
-                points=written,
-            )
-        return written
 
     def _history_range(self) -> tuple[str, str]:
         """Окно дат history-запросов: последние history_days дней включая сегодня."""

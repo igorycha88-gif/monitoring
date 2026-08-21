@@ -30,6 +30,7 @@ def make_collector(
     extra_domain: str | None = None,
     top_queries: int = 50,
     history_days: int = 7,
+    storage: object | None = None,
 ) -> WebmasterCollector:
     sites = [SiteConfig(domain=domain, webmaster_host_id=host_id)]
     if extra_domain:
@@ -40,6 +41,7 @@ def make_collector(
         timeout_seconds=1.0,
         top_queries=top_queries,
         history_days=history_days,
+        storage=storage,  # type: ignore[arg-type]
     )
     collector.retry_base_delay = 0
     return collector
@@ -121,18 +123,23 @@ async def test_collect_success_writes_metrics_and_request_params() -> None:
             ]
         )
     )
-    collector = make_collector()
+    storage = FakeStorage()
+    collector = make_collector(storage=storage)
 
     with capture_logs() as captured:
         result = await collector.run_once()
 
-    assert result == {"sites_ok": 1, "sites_total": 1, "points_total": 6}
+    # ADR-011: points = строки БД (2 weekly; история пустая → 0 daily)
+    assert result == {"sites_ok": 1, "sites_total": 1, "points_total": 2}
     metrics = generate_latest().decode()
-    assert 'monitoring_search_clicks_total{query="купить слона",site="w.com"} 50.0' in metrics
-    assert 'monitoring_search_shows_total{query="купить слона",site="w.com"} 1000.0' in metrics
-    assert 'monitoring_search_position{query="купить слона",site="w.com"} 3.5' in metrics
-    assert 'monitoring_search_position{query="слон недорого",site="w.com"} 7.1' in metrics
     assert 'monitoring_collector_success{site="w.com",source="webmaster"} 1.0' in metrics
+    # Прямые записи gauge удалены: метрик поиска в /metrics нет (рендер — из БД)
+    assert "monitoring_search_" not in metrics
+    site, weekly_rows, _ = storage.weekly_calls[0]
+    assert site == "w.com"
+    assert [row.query_id for row in weekly_rows] == ["a1", "a2"]
+    assert weekly_rows[0].clicks == 50.0
+    assert weekly_rows[0].position == 3.5
 
     user_request = user_route.calls.last.request
     assert user_request.headers["Authorization"] == "OAuth test-token"
@@ -148,7 +155,7 @@ async def test_collect_success_writes_metrics_and_request_params() -> None:
 
     done = [entry for entry in captured if entry["event"] == "webmaster_collect_done"]
     assert done[0]["queries"] == 2
-    assert done[0]["points"] == 6
+    assert done[0]["rows_written"] == 2
     assert all("test-token" not in str(entry) for entry in captured)
 
 
@@ -319,7 +326,7 @@ async def test_server_error_retried_then_success() -> None:
     assert result["sites_ok"] == 1
     assert route.call_count == 2
     metrics = generate_latest().decode()
-    assert 'monitoring_search_clicks_total{query="купить слона",site="w.com"} 50.0' in metrics
+    assert 'monitoring_collector_success{site="w.com",source="webmaster"} 1.0' in metrics
 
 
 @respx.mock
@@ -464,7 +471,8 @@ async def test_host_site_and_plain_site_mixed() -> None:
 
     result = await collector.run_once()
 
-    assert result == {"sites_ok": 1, "sites_total": 1, "points_total": 3}
+    # 1 строка weekly (история пустая → 0 daily)
+    assert result == {"sites_ok": 1, "sites_total": 1, "points_total": 1}
     metrics = generate_latest().decode()
     assert 'monitoring_collector_success{site="with.com",source="webmaster"} 1.0' in metrics
     assert 'monitoring_collector_success{site="without.com",source="webmaster"}' not in metrics
@@ -479,16 +487,17 @@ async def test_missing_indicator_not_written() -> None:
             [{"query_id": "q1", "query_text": "только клики", "indicators": {"TOTAL_CLICKS": 5}}]
         )
     )
-    collector = make_collector()
+    storage = FakeStorage()
+    collector = make_collector(storage=storage)
 
     with capture_logs() as captured:
         result = await collector.run_once()
 
     assert result["points_total"] == 1
-    metrics = generate_latest().decode()
-    assert 'monitoring_search_clicks_total{query="только клики",site="w.com"} 5.0' in metrics
-    assert 'monitoring_search_shows_total{query="только клики"' not in metrics
-    assert 'monitoring_search_position{query="только клики"' not in metrics
+    weekly_rows = storage.weekly_calls[0][1]
+    assert weekly_rows[0].clicks == 5.0
+    assert weekly_rows[0].shows is None  # «не определён» хранится как None, не 0
+    assert weekly_rows[0].position is None
     assert not [entry for entry in captured if entry["event"] == "webmaster_blank_query_skipped"]
 
 
@@ -528,14 +537,15 @@ async def test_query_label_normalized() -> None:
             ]
         )
     )
-    collector = make_collector()
+    storage = FakeStorage()
+    collector = make_collector(storage=storage)
 
     result = await collector.run_once()
 
     assert result["points_total"] == 2
-    metrics = generate_latest().decode()
-    assert 'monitoring_search_clicks_total{query="много пробелов",site="w.com"} 1.0' in metrics
-    assert f'{{query="{"a" * QUERY_LABEL_MAX_LENGTH}",site="w.com"}} 2.0' in metrics
+    weekly_rows = storage.weekly_calls[0][1]
+    assert weekly_rows[0].query == "много пробелов"
+    assert weekly_rows[1].query == "a" * QUERY_LABEL_MAX_LENGTH
 
 
 @pytest.mark.parametrize(
@@ -556,7 +566,7 @@ async def test_top_queries_clamped(top_queries: int, expected_limit: str) -> Non
 
 @respx.mock
 async def test_repeated_collection_updates_values() -> None:
-    """История позиций строится TSDB: повторный сбор обновляет значения метрик."""
+    """Повторный сбор обновляет значения в БД (рендер берёт последние)."""
     mock_user()
     mock_history()
     respx.get(popular_url()).mock(
@@ -577,23 +587,16 @@ async def test_repeated_collection_updates_values() -> None:
             ),
         ]
     )
-    collector = make_collector()
+    storage = FakeStorage()
+    collector = make_collector(storage=storage)
 
     await collector.run_once()
-    metrics_after_first = generate_latest().decode()
-    assert (
-        'monitoring_search_position{query="купить слона",site="w.com"} 3.5' in metrics_after_first
-    )
+    assert storage.weekly_calls[0][1][0].position == 3.5
 
     await collector.run_once()
-    metrics_after_second = generate_latest().decode()
-    assert (
-        'monitoring_search_position{query="купить слона",site="w.com"} 2.0' in metrics_after_second
-    )
-    assert (
-        'monitoring_search_clicks_total{query="купить слона",site="w.com"} 75.0'
-        in metrics_after_second
-    )
+    second = storage.weekly_calls[1][1][0]
+    assert second.position == 2.0
+    assert second.clicks == 75.0
 
 
 def test_collector_attributes() -> None:
@@ -607,7 +610,7 @@ def test_collector_attributes() -> None:
 
 @respx.mock
 async def test_history_writes_only_newest_complete_point() -> None:
-    """Из окна истории пишется только новейшая ЗАВЕРШЁННАЯ точка (ADR-008 D1)."""
+    """Из окна истории в БД пишется только новейшая ЗАВЕРШЁННАЯ точка (ADR-008 D1)."""
     mock_user()
     respx.get(popular_url()).mock(
         return_value=popular_response(
@@ -622,23 +625,23 @@ async def test_history_writes_only_newest_complete_point() -> None:
         ],
         clicks=[{"date": yandex_iso(1), "value": 7}, {"date": yandex_iso(0), "value": 999}],
     )
-    collector = make_collector(domain="hist.com")
+    storage = FakeStorage()
+    collector = make_collector(domain="hist.com", storage=storage)
 
     with capture_logs() as captured:
         result = await collector.run_once()
 
-    # 2 popular-запроса × 3 метрики... QUERY_FULL даёт 3, второй (indicators={}) — 0;
-    # history: 2 запроса × 2 индикатора = 4. Сегодня (999) исключено.
-    assert result == {"sites_ok": 1, "sites_total": 1, "points_total": 3 + 4}
-    metrics = generate_latest().decode()
-    assert 'monitoring_search_daily_clicks{query="купить слона",site="hist.com"} 7.0' in metrics
-    assert 'monitoring_search_daily_shows{query="купить слона",site="hist.com"} 200.0' in metrics
-    assert 'monitoring_search_daily_clicks{query="слон недорого",site="hist.com"} 7.0' in metrics
-    assert (
-        'monitoring_search_daily_clicks{query="купить слона",site="hist.com"} 999' not in metrics
-    )  # сегодняшний (незавершённый) день исключён
-    written = [entry for entry in captured if entry["event"] == "webmaster_history_written"]
-    assert len(written) == 2  # по одному событию на запрос (клики + показы внутри)
+    # 2 weekly-строки + 2 daily (история обоих запросов: мок общий)
+    assert result == {"sites_ok": 1, "sites_total": 1, "points_total": 2 + 2}
+    site, daily_rows, _ = storage.daily_calls[0]
+    assert site == "hist.com"
+    expected_day = (datetime.now(tz=YANDEX_TZ).date() - timedelta(days=1)).isoformat()
+    by_query = {row.query_id: row for row in daily_rows}
+    assert by_query["a1"].date == expected_day  # новейшая завершённая, не сегодня (999)
+    assert by_query["a1"].clicks == 7.0
+    assert by_query["a1"].shows == 200.0
+    collected = [entry for entry in captured if entry["event"] == "webmaster_history_collected"]
+    assert len(collected) == 2  # по одному событию на запрос
     assert all("test-token" not in str(entry) for entry in captured)
 
 
@@ -651,30 +654,29 @@ async def test_history_excludes_incomplete_today() -> None:
         shows=[{"date": yandex_iso(0), "value": 999}],
         clicks=[{"date": yandex_iso(0), "value": 999}],
     )
-    collector = make_collector(domain="only-today.com")
+    storage = FakeStorage()
+    collector = make_collector(domain="only-today.com", storage=storage)
 
     result = await collector.run_once()
 
-    assert result == {"sites_ok": 1, "sites_total": 1, "points_total": 3}
-    metrics = generate_latest().decode()
-    assert 'monitoring_search_daily_clicks{site="only-today.com"' not in metrics
-    assert 'monitoring_search_daily_shows{site="only-today.com"' not in metrics
+    # только weekly-строка; daily пуст
+    assert result == {"sites_ok": 1, "sites_total": 1, "points_total": 1}
+    assert storage.daily_calls == []
 
 
 @respx.mock
 async def test_history_empty_indicators_success() -> None:
-    """Индикаторы без точек — данные: успех, дневные метрики не пишутся."""
+    """Индикаторы без точек — данные: успех, дневные строки не пишутся."""
     mock_user()
     respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
     mock_history()
-    collector = make_collector(domain="empty-hist.com")
+    storage = FakeStorage()
+    collector = make_collector(domain="empty-hist.com", storage=storage)
 
     result = await collector.run_once()
 
-    assert result == {"sites_ok": 1, "sites_total": 1, "points_total": 3}
-    metrics = generate_latest().decode()
-    assert 'monitoring_search_daily_clicks{site="empty-hist.com"' not in metrics
-    assert 'monitoring_search_daily_shows{site="empty-hist.com"' not in metrics
+    assert result == {"sites_ok": 1, "sites_total": 1, "points_total": 1}
+    assert storage.daily_calls == []
 
 
 @respx.mock
@@ -683,18 +685,15 @@ async def test_history_missing_indicator_partial_write() -> None:
     mock_user()
     respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
     mock_history(clicks=[{"date": yandex_iso(1), "value": 7}])
-    collector = make_collector(domain="partial-hist.com")
+    storage = FakeStorage()
+    collector = make_collector(domain="partial-hist.com", storage=storage)
 
     result = await collector.run_once()
 
-    assert result["points_total"] == 4  # 3 popular + 1 history
-    metrics = generate_latest().decode()
-    assert 'monitoring_search_daily_clicks{query="купить слона",site="partial-hist.com"} 7.0' in (
-        metrics
-    )
-    assert 'monitoring_search_daily_shows{query="купить слона",site="partial-hist.com"' not in (
-        metrics
-    )
+    assert result["points_total"] == 2  # 1 weekly + 1 daily
+    daily_rows = storage.daily_calls[0][1]
+    assert daily_rows[0].clicks == 7.0
+    assert daily_rows[0].shows is None  # показы «не определены» — None, не 0
 
 
 @respx.mock
@@ -748,14 +747,15 @@ async def test_history_query_404_skipped_not_site_error() -> None:
     with capture_logs() as captured:
         result = await collector.run_once()
 
-    assert result == {"sites_ok": 1, "sites_total": 1, "points_total": 3}
+    # только weekly-строка; daily нет
+    assert result == {"sites_ok": 1, "sites_total": 1, "points_total": 1}
     assert route.call_count == 1
     metrics = generate_latest().decode()
     assert 'monitoring_collector_success{site="hist-404q.com",source="webmaster"} 1.0' in metrics
     skipped = [entry for entry in captured if entry["event"] == "webmaster_history_query_skipped"]
     assert len(skipped) == 1
     done = [entry for entry in captured if entry["event"] == "webmaster_history_done"]
-    assert done[0]["points"] == 0
+    assert done[0]["rows_written"] == 0
 
 
 @respx.mock
@@ -816,9 +816,7 @@ async def test_history_server_error_retried_then_success() -> None:
     assert result["sites_ok"] == 1
     assert route.call_count == 2
     metrics = generate_latest().decode()
-    assert 'monitoring_search_daily_clicks{query="купить слона",site="hist-503.com"} 9.0' in (
-        metrics
-    )
+    assert 'monitoring_collector_success{site="hist-503.com",source="webmaster"} 1.0' in metrics
 
 
 @respx.mock
@@ -911,7 +909,7 @@ async def test_popular_query_without_id_is_error() -> None:
 
 @respx.mock
 async def test_history_repeated_collection_updates_values() -> None:
-    """Повторный сбор обновляет дневные метрики (ряды накапливаются в TSDB)."""
+    """Повторный сбор обновляет дневные строки в БД (ряды накапливаются)."""
     mock_user()
     respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
     respx.get(path__regex=HISTORY_ROUTE_RE).mock(
@@ -938,22 +936,17 @@ async def test_history_repeated_collection_updates_values() -> None:
             ),
         ]
     )
-    collector = make_collector(domain="hist-repeat.com")
+    storage = FakeStorage()
+    collector = make_collector(domain="hist-repeat.com", storage=storage)
 
     await collector.run_once()
-    first = generate_latest().decode()
-    assert 'monitoring_search_daily_clicks{query="купить слона",site="hist-repeat.com"} 4.0' in (
-        first
-    )
+    first = storage.daily_calls[0][1][0]
+    assert first.clicks == 4.0
 
     await collector.run_once()
-    second = generate_latest().decode()
-    assert 'monitoring_search_daily_clicks{query="купить слона",site="hist-repeat.com"} 8.0' in (
-        second
-    )
-    assert 'monitoring_search_daily_shows{query="купить слона",site="hist-repeat.com"} 80.0' in (
-        second
-    )
+    second = storage.daily_calls[1][1][0]
+    assert second.clicks == 8.0
+    assert second.shows == 80.0
 
 
 def test_normalize_query_unit() -> None:
@@ -1051,9 +1044,8 @@ async def test_storage_error_does_not_fail_collection() -> None:
     with capture_logs() as captured:
         result = await collector.run_once()
 
-    assert result["sites_ok"] == 1  # сбор прошёл
+    assert result["sites_ok"] == 1  # сбор прошёл, ошибка БД не роняет его
     metrics = generate_latest().decode()
-    assert 'monitoring_search_clicks_total{query="купить слона",site="db-fail.com"} 50.0' in metrics
     assert 'monitoring_collector_success{site="db-fail.com",source="webmaster"} 1.0' in metrics
     # Счётчик ошибок хранилища доступен на /metrics
     assert 'monitoring_storage_errors_total{source="webmaster"}' in metrics

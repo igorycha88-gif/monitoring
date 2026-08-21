@@ -56,42 +56,6 @@ SITE_VISITORS = Gauge(
     ["site", "source"],
 )
 
-SEARCH_CLICKS_TOTAL = Gauge(
-    "monitoring_search_clicks_total",
-    "Клики по поисковому запросу за последнюю неделю (скользящее окно Вебмастера); "
-    "gauge — применять напрямую, без rate()",
-    ["site", "query"],
-)
-
-SEARCH_SHOWS_TOTAL = Gauge(
-    "monitoring_search_shows_total",
-    "Показы по поисковому запросу за последнюю неделю (скользящее окно Вебмастера); "
-    "gauge — применять напрямую, без rate()",
-    ["site", "query"],
-)
-
-SEARCH_POSITION = Gauge(
-    "monitoring_search_position",
-    "Средняя позиция показа поискового запроса за последнюю неделю; меньше — лучше",
-    ["site", "query"],
-)
-
-SEARCH_DAILY_CLICKS = Gauge(
-    "monitoring_search_daily_clicks",
-    "Клики по поисковому запросу за последний ЗАВЕРШЁННЫЙ день; дата дня = "
-    "метка времени точки (1 точка/день из per-query history, ADR-008); "
-    "сумма по запросам = сайт (топ-N по кликам); gauge — без rate()",
-    ["site", "query"],
-)
-
-SEARCH_DAILY_SHOWS = Gauge(
-    "monitoring_search_daily_shows",
-    "Показы по поисковому запросу за последний ЗАВЕРШЁННЫЙ день; дата дня = "
-    "метка времени точки (1 точка/день из per-query history, ADR-008); "
-    "сумма по запросам = сайт (топ-N по кликам); gauge — без rate()",
-    ["site", "query"],
-)
-
 SITE_METRICS_UP = Gauge(
     "monitoring_site_metrics_up",
     "Доступность эндпоинта метрик сайта (1 — HTTP 2xx с корректным ключом, "
@@ -113,7 +77,7 @@ SITE_METRICS_LATENCY_SECONDS = Gauge(
 
 STORAGE_ERRORS_TOTAL = Counter(
     "monitoring_storage_errors_total",
-    "Ошибки записи в долговременное хранилище (SQLite, ADR-009); "
+    "Ошибки чтения/записи в долговременное хранилище (SQLite, ADR-009/011); "
     "сбор метрик Prometheus при этом продолжается",
     ["source"],
 )

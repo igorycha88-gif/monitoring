@@ -129,3 +129,73 @@ def test_daily_separate_days_and_sites(storage: WebmasterStorage, tmp_path: Path
 
 def test_close_is_safe(storage: WebmasterStorage) -> None:
     storage.close()  # подключения на вызов — закрывать нечего, не падает
+
+
+# --- Чтение для рендера /metrics (ADR-011 D2) ---
+
+
+def test_latest_weekly_returns_last_snapshot_per_query(storage: WebmasterStorage) -> None:
+    storage.save_weekly("w.com", [WEEKLY_A], "2026-08-20T07:00:00+00:00")
+    corrected = WeeklyRow("a1", "купить слона", 1100.0, 55.0, 3.0)
+    storage.save_weekly("w.com", [corrected, WEEKLY_B], "2026-08-20T19:00:00+00:00")
+
+    points = storage.latest_weekly()
+
+    by_query = {point.query_id: point for point in points}
+    assert set(by_query) == {"a1", "a2"}
+    assert by_query["a1"].clicks == 55.0  # последний снапшот
+    assert by_query["a1"].site == "w.com"
+    assert by_query["a1"].shows == 1100.0
+
+
+def test_latest_weekly_separate_sites(storage: WebmasterStorage) -> None:
+    storage.save_weekly("w.com", [WEEKLY_A], "2026-08-20T07:00:00+00:00")
+    storage.save_weekly("other.ru", [WEEKLY_A], "2026-08-21T07:00:00+00:00")
+
+    points = storage.latest_weekly()
+
+    sites = {point.site for point in points}
+    assert sites == {"w.com", "other.ru"}
+
+
+def test_latest_daily_newest_date_per_query(storage: WebmasterStorage) -> None:
+    storage.save_daily("w.com", [DailyRow("a1", "слон", "2026-08-17", 1.0, 10.0)], "t1")
+    storage.save_daily("w.com", [DailyRow("a1", "слон", "2026-08-18", 2.0, 20.0)], "t2")
+
+    points = storage.latest_daily("2026-08-01")
+
+    assert len(points) == 1
+    assert points[0].date == "2026-08-18"
+    assert points[0].clicks == 2.0
+
+
+def test_latest_daily_window_filters_stale_queries(storage: WebmasterStorage) -> None:
+    storage.save_daily("w.com", [DailyRow("a1", "свежий", "2026-08-20", 1.0, 10.0)], "t1")
+    storage.save_daily("w.com", [DailyRow("a2", "старый", "2026-07-01", 2.0, 20.0)], "t2")
+
+    points = storage.latest_daily("2026-08-15")
+
+    assert [point.query_id for point in points] == ["a1"]
+
+
+def test_latest_daily_empty(storage: WebmasterStorage) -> None:
+    assert storage.latest_daily("2026-08-01") == []
+
+
+def test_daily_history_end_bound(storage: WebmasterStorage) -> None:
+    storage.save_daily("w.com", [DailyRow("a1", "слон", "2026-08-17", 1.0, 10.0)], "t1")
+    storage.save_daily("w.com", [DailyRow("a1", "слон", "2026-08-18", 2.0, 20.0)], "t2")
+    storage.save_daily("w.com", [DailyRow("a1", "слон", "2026-08-19", 3.0, 30.0)], "t3")
+
+    points = storage.daily_history("2026-08-18")
+
+    assert [point.date for point in points] == ["2026-08-17", "2026-08-18"]  # end включительно
+
+
+def test_daily_history_preserves_none_indicators(storage: WebmasterStorage) -> None:
+    storage.save_daily("w.com", [DailyRow("a1", "слон", "2026-08-18", None, 20.0)], "t1")
+
+    points = storage.daily_history("2026-08-18")
+
+    assert points[0].clicks is None
+    assert points[0].shows == 20.0

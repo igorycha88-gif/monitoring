@@ -18,10 +18,11 @@
 │  │  ├── /api/v1/sd/site-metrics/{kind} — HTTP SD (relay-таргеты) [ЭПИК-9, ADR-010]
 │  │  ├── /api/v1/relay/site-metrics/{kind}/{site} — proxy с персайтным ключом [ADR-010]
 │  │  └── APScheduler    — расписание коллекторов  │          │
-│  │       ├── collectors/uptime.py    [ЭПИК-1]    │──▶ HTTP/SSL сайтов
-│  │       ├── collectors/metrika.py   [ЭПИК-2]    │──▶ Яндекс.Метрика API
-│  │       ├── collectors/webmaster.py [ЭПИК-5]    │──▶ Яндекс.Вебмастер API
-│  │       ├── collectors/sitemetrics.py [ЭПИК-9]  │──▶ health эндпоинтов метрик
+    │  │   ├── collectors/uptime.py    [ЭПИК-1]    │──▶ HTTP/SSL сайтов
+    │  │   ├── collectors/metrika.py   [ЭПИК-2]    │──▶ Яндекс.Метрика API
+    │  │   ├── collectors/webmaster.py [ЭПИК-5]    │──▶ SQLite [ADR-011]
+    │  │   ├── webmaster_export.py     [ADR-011]   │──▶ /metrics из SQLite
+    │  │   ├── collectors/sitemetrics.py [ЭПИК-9]  │──▶ health эндпоинтов метрик
 │  └──────────────────────┬────────────────────────┘          │
 │                         │ /metrics (pull, 15s)              │
 │  ┌──────────────────────▼────────────────────────┐          │
@@ -65,8 +66,9 @@ monitoring/
 │   ├── config.py            # Settings (pydantic-settings, .env)
 │   ├── logging.py           # structlog (JSON по умолчанию)
 │   ├── sites.py             # загрузка/валидация config/sites.yml
-│   ├── metrics.py           # реестр метрик monitoring_*
+│   ├── metrics.py           # реестр метрик monitoring_* (поиск — рендер из БД, ADR-011)
 │   ├── storage.py           # WebmasterStorage: SQLite (WAL) данных Вебмастера [ADR-009]
+│   ├── webmaster_export.py  # рендер поисковых метрик из SQLite → /metrics [ADR-011]
 │   └── api/v1/
 │       ├── health.py        # GET /health
 │       ├── sites.py         # GET /api/v1/sites
@@ -95,7 +97,9 @@ monitoring/
 │   └── alertmanager-entrypoint.sh
 ├── scripts/
 │   ├── backup.sh            # бэкап конфигов+дашбордов+.env (tar.gz+sha256, ротация 14) [ЭПИК-8]
-│   └── restore.sh           # восстановление из архива (sha256-проверка, .env только с --with-env) [ЭПИК-8]
+│   ├── restore.sh           # восстановление из архива (sha256-проверка, .env только с --with-env) [ЭПИК-8]
+│   ├── backfill_webmaster_daily.py   # разовый backfill истории Вебмастера в SQLite [ADR-009]
+│   └── export_webmaster_history.py   # экспорт истории в OpenMetrics для promtool-импорта [ADR-011]
 ├── tests/
 ├── docker-compose.yml       # app 8088 + prometheus 9091 + alertmanager 9093 + grafana 3300
 ├── Dockerfile
@@ -117,7 +121,11 @@ monitoring/
   `monitoring_search_daily_clicks` / `monitoring_search_daily_shows`
   `{site, query}` (gauge, 1 точка/день из per-query history,
   `/search-queries/{query_id}/history`, дата = метка времени — ADR-008;
-  сайт-уровень = `sum()` по отслеживаемым запросам, лейбл даты НЕ вводится)
+  сайта-уровень = `sum()` по отслеживаемым запросам, лейбл даты НЕ вводится);
+  источник метрик поиска — SQLite, рендер `/metrics` кастомным collector'ом
+  `WebmasterExporter` без timestamp'ов, окно рендера `WEBMASTER_RENDER_DAYS`
+  (35д); прямые записи gauge коллектором удалены — БД единственный источник
+  (ADR-011); история в TSDB — разовым promtool-импортом (ADR-011 D4)
 - Здоровье САЙТА (`monitoring_uptime_status`) ≠ здоровье КОЛЛЕКТОРА
   (`monitoring_collector_success`): лежащий сайт — это данные (status=0),
   а не ошибка коллектора (см. ADR-002)

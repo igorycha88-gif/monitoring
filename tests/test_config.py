@@ -41,6 +41,19 @@ def test_site_metrics_defaults() -> None:
 def test_webmaster_history_days_default() -> None:
     settings = Settings(_env_file=None)
     assert settings.webmaster_history_days == 7
+    assert settings.webmaster_render_days == 35
+    assert settings.webmaster_render_refresh_seconds == 60.0
+
+
+def test_webmaster_render_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR-011: окно рендера и период обновления кэша задаются из env."""
+    monkeypatch.setenv("WEBMASTER_RENDER_DAYS", "60")
+    monkeypatch.setenv("WEBMASTER_RENDER_REFRESH_SECONDS", "5.5")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.webmaster_render_days == 60
+    assert settings.webmaster_render_refresh_seconds == 5.5
 
 
 def test_webmaster_history_days_env_override(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -58,9 +58,31 @@ class WeeklyRow(NamedTuple):
     position: float | None
 
 
+class WeeklyPoint(NamedTuple):
+    """Недельный снапшот с привязкой к сайту (последний прогон, ADR-011 D2)."""
+
+    site: str
+    query_id: str
+    query: str
+    shows: float | None
+    clicks: float | None
+    position: float | None
+
+
 class DailyRow(NamedTuple):
     """Дневная точка запроса (per-query history); None = индикатор не определён."""
 
+    query_id: str
+    query: str
+    date: str
+    clicks: float | None
+    shows: float | None
+
+
+class DailyPoint(NamedTuple):
+    """Дневная точка с привязкой к сайту (ADR-011 D2)."""
+
+    site: str
     query_id: str
     query: str
     date: str
@@ -175,3 +197,98 @@ class WebmasterStorage:
     def close(self) -> None:
         """Закрывает хранилище (подключения — на вызов, закрывать нечего)."""
         logger.info("storage_closed", path=self.path)
+
+    # --- Чтение (рендер /metrics из БД, ADR-011 D2) ---
+
+    def latest_weekly(self) -> list[WeeklyPoint]:
+        """Последний снапшот каждого (site, query_id) — по MAX(fetched_at).
+
+        Вечерний прогон перезаписывает утренний того же дня: MAX выбирает
+        актуальные значения.
+        """
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT site, query_id, query, shows, clicks, position
+                FROM webmaster_weekly AS w
+                WHERE fetched_at = (
+                    SELECT MAX(w2.fetched_at) FROM webmaster_weekly AS w2
+                    WHERE w2.site = w.site AND w2.query_id = w.query_id
+                )
+                """
+            ).fetchall()
+        finally:
+            conn.close()
+        return [
+            WeeklyPoint(
+                site=str(site),
+                query_id=str(query_id),
+                query=str(query),
+                shows=shows,
+                clicks=clicks,
+                position=position,
+            )
+            for site, query_id, query, shows, clicks, position in rows
+        ]
+
+    def latest_daily(self, since_date: str) -> list[DailyPoint]:
+        """Последняя дата каждого (site, query_id) не раньше since_date.
+
+        Запросы, не появлявшиеся в окне рендера, не отдаются — кардинальность
+        ограничена окном (ADR-011 D2).
+        """
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT site, query_id, query, date, clicks, shows
+                FROM webmaster_daily AS w
+                WHERE date >= ?
+                  AND date = (
+                      SELECT MAX(w2.date) FROM webmaster_daily AS w2
+                      WHERE w2.site = w.site AND w2.query_id = w.query_id
+                  )
+                """,
+                (since_date,),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [
+            DailyPoint(
+                site=str(site),
+                query_id=str(query_id),
+                query=str(query),
+                date=str(day),
+                clicks=clicks,
+                shows=shows,
+            )
+            for site, query_id, query, day, clicks, shows in rows
+        ]
+
+    def daily_history(self, end_date: str) -> list[DailyPoint]:
+        """Все дневные точки с датой <= end_date (экспорт истории, ADR-011 D4)."""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT site, query_id, query, date, clicks, shows
+                FROM webmaster_daily
+                WHERE date <= ?
+                ORDER BY site, query, date
+                """,
+                (end_date,),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [
+            DailyPoint(
+                site=str(site),
+                query_id=str(query_id),
+                query=str(query),
+                date=str(day),
+                clicks=clicks,
+                shows=shows,
+            )
+            for site, query_id, query, day, clicks, shows in rows
+        ]

@@ -8,7 +8,6 @@ __pycache__
 .coverage
 htmlcov
 data
-tests
 .env
 *.md
 PIPELINE.js

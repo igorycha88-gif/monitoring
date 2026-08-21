@@ -61,14 +61,22 @@ def test_prometheus_config_no_real_key() -> None:
 
 
 def test_prometheus_retention_supports_year_slices() -> None:
-    """ADR-008: годовые срезы [$period=365d] требуют retention >= 1 года.
+    """ADR-008: годовые срезы [$period=365d] требуют долгого хранения данных.
 
-    Флаг задаёт entrypoint-скрипт (единственный источник истины): повтор
-    флага в compose command + entrypoint ломает запуск Prometheus (crash).
+    Фикс Prometheus 3.14 (коммит 9ed7d15): time-ретеншн отключён (баг
+    BeyondTimeRetention µs-vs-ms удалял backfill-блоки как obsolete),
+    вместо него size-ретеншн 20GB в КОНФИГЕ; entrypoint не задаёт флаг
+    retention (deprecated) и пробрасывает "$@" из compose.
     """
     root = Path(__file__).resolve().parent.parent
+    config = load_config()
+    storage = config["storage"]["tsdb"]["retention"]
+    assert "size" in storage, "size-ретеншн обязателен (замена time-ретеншну)"
+    assert storage["size"] == "20GB"
+    assert "time" not in storage, "time-ретеншн удаляет backfill-блоки (баг 3.14)"
     entrypoint = (root / "prometheus" / "prometheus-entrypoint.sh").read_text(encoding="utf-8")
-    assert "--storage.tsdb.retention.time=400d" in entrypoint
+    exec_block = entrypoint.split("exec prometheus", 1)[1]
+    assert "--storage.tsdb.retention" not in exec_block, "флаг deprecated — ретеншн в конфиге"
     assert '"$@"' in entrypoint
     compose = (root / "docker-compose.yml").read_text(encoding="utf-8")
-    assert "storage.tsdb.retention" not in compose, "флаг только в entrypoint (иначе повтор)"
+    assert "storage.tsdb.retention" not in compose, "ретеншн только в конфиге (иначе повтор)"

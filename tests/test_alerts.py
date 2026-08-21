@@ -191,8 +191,11 @@ class TestPrometheusEntrypoint:
 
     def test_retention_and_args_passthrough(self) -> None:
         content = self.PROMETHEUS_ENTRYPOINT_SH.read_text(encoding="utf-8")
-        # ADR-008: retention поднят с 90d до 400d (годовые срезы)
-        assert "--storage.tsdb.retention.time=400d" in content
+        # Фикс Prometheus 3.14 (9ed7d15): time-ретеншн в entrypoint убран
+        # (баг µs-vs-ms удалял backfill-блоки), ретеншн — size 20GB в конфиге
+        exec_block = content.split("exec prometheus", 1)[1]
+        assert "--storage.tsdb.retention" not in exec_block
+        assert '"$@"' in content
 
 
 class TestComposeWiring:

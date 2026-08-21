@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     # Долговременное хранение данных Вебмастера в SQLite (ADR-009);
     # пустая строка — хранение отключено
     webmaster_db_path: str = "data/webmaster.db"
+    # Рендер поисковых метрик из БД (ADR-011): окно дневных точек (дни,
+    # граница кардинальности) и период фонового обновления кэша (сек)
+    webmaster_render_days: int = 35
+    webmaster_render_refresh_seconds: float = 60.0
 
     yandex_metrika_oauth_token: str = ""
     yandex_webmaster_oauth_token: str = ""
