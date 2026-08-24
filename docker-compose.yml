@@ -25,7 +25,10 @@ services:
     # здесь command НЕ дублируется (повтор флага = crash Prometheus).
     # ADR-010: скрейпы site-* идут через relay приложения — Prometheus
     # не получает секретов вообще.
+    # --web.enable-admin-api: чистка устаревших серий (delete_series,
+    # ЧТЗ_Удаление_Сайтов_Заглушек_Из_Графаны); порт только 127.0.0.1.
     entrypoint: ["/bin/sh", "/etc/prometheus/prometheus-entrypoint.sh"]
+    command: ["--web.enable-admin-api"]
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml.tmpl:ro
       - ./prometheus/prometheus-entrypoint.sh:/etc/prometheus/prometheus-entrypoint.sh:ro

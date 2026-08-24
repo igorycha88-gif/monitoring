@@ -30,8 +30,6 @@ APP = "http://127.0.0.1:8088"
 GRAF = "http://127.0.0.1:3300"
 
 EXPECTED_COLLECTORS: dict[str, set[str]] = {
-    "example.com": {"uptime", "ssl", "site-metrics"},
-    "example.org": {"uptime", "ssl", "site-metrics"},
     "da-dryclean.ru": {"uptime", "ssl", "webmaster", "site-metrics"},
     "эвакуация.online": {"uptime", "ssl", "webmaster", "metrika", "site-metrics"},
 }
