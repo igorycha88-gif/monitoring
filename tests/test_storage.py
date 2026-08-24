@@ -134,7 +134,7 @@ def test_close_is_safe(storage: WebmasterStorage) -> None:
 # --- Чтение для рендера /metrics (ADR-011 D2) ---
 
 
-def test_latest_weekly_returns_last_snapshot_per_query(storage: WebmasterStorage) -> None:
+def test_latest_weekly_returns_last_snapshot_per_site(storage: WebmasterStorage) -> None:
     storage.save_weekly("w.com", [WEEKLY_A], "2026-08-20T07:00:00+00:00")
     corrected = WeeklyRow("a1", "купить слона", 1100.0, 55.0, 3.0)
     storage.save_weekly("w.com", [corrected, WEEKLY_B], "2026-08-20T19:00:00+00:00")
@@ -148,6 +148,28 @@ def test_latest_weekly_returns_last_snapshot_per_query(storage: WebmasterStorage
     assert by_query["a1"].shows == 1100.0
 
 
+def test_latest_weekly_dropped_query_not_rendered(storage: WebmasterStorage) -> None:
+    """Запрос, выпавший из топа, исчезает из рендера вместе со старым снапшотом."""
+    storage.save_weekly("w.com", [WEEKLY_A, WEEKLY_B], "2026-08-20T07:00:00+00:00")
+    storage.save_weekly("w.com", [WEEKLY_A], "2026-08-20T19:00:00+00:00")
+
+    points = storage.latest_weekly()
+
+    assert [point.query_id for point in points] == ["a1"]
+
+
+def test_latest_weekly_old_values_not_mixed(storage: WebmasterStorage) -> None:
+    """Значения одного запроса из старого снапшота не подмешиваются к новому."""
+    storage.save_weekly("w.com", [WEEKLY_A], "2026-08-20T07:00:00+00:00")
+    updated = WeeklyRow("a1", "купить слона", 900.0, 40.0, 4.0)
+    storage.save_weekly("w.com", [updated], "2026-08-20T19:00:00+00:00")
+
+    points = storage.latest_weekly()
+
+    assert len(points) == 1
+    assert (points[0].shows, points[0].clicks) == (900.0, 40.0)
+
+
 def test_latest_weekly_separate_sites(storage: WebmasterStorage) -> None:
     storage.save_weekly("w.com", [WEEKLY_A], "2026-08-20T07:00:00+00:00")
     storage.save_weekly("other.ru", [WEEKLY_A], "2026-08-21T07:00:00+00:00")
@@ -156,6 +178,24 @@ def test_latest_weekly_separate_sites(storage: WebmasterStorage) -> None:
 
     sites = {point.site for point in points}
     assert sites == {"w.com", "other.ru"}
+
+
+def test_latest_weekly_site_snapshot_independent(storage: WebmasterStorage) -> None:
+    """MAX(fetched_at) у каждого сайта свой: свежий срез w.com не тянет
+    устаревший срез other.ru."""
+    storage.save_weekly("w.com", [WEEKLY_A], "2026-08-21T19:00:00+00:00")
+    storage.save_weekly("other.ru", [WEEKLY_A, WEEKLY_B], "2026-08-20T07:00:00+00:00")
+
+    points = storage.latest_weekly()
+
+    by_site: dict[str, set[str]] = {}
+    for point in points:
+        by_site.setdefault(point.site, set()).add(point.query_id)
+    assert by_site == {"w.com": {"a1"}, "other.ru": {"a1", "a2"}}
+
+
+def test_latest_weekly_empty(storage: WebmasterStorage) -> None:
+    assert storage.latest_weekly() == []
 
 
 def test_latest_daily_newest_date_per_query(storage: WebmasterStorage) -> None:

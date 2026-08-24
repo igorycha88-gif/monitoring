@@ -609,8 +609,13 @@ def test_collector_attributes() -> None:
 
 
 @respx.mock
-async def test_history_writes_only_newest_complete_point() -> None:
-    """Из окна истории в БД пишется только новейшая ЗАВЕРШЁННАЯ точка (ADR-008 D1)."""
+async def test_history_writes_all_complete_days() -> None:
+    """В БД пишутся ВСЕ завершённые дни окна истории, сегодня — исключён.
+
+    Фикс инцидента 2026-08-24: агрегаты Яндекса финализируются с лагом >1
+    суток — перезапись всего окна каждым прогоном подхватывает
+    ретро-корректировки через upsert (ADR-008 D1).
+    """
     mock_user()
     respx.get(popular_url()).mock(
         return_value=popular_response(
@@ -631,18 +636,103 @@ async def test_history_writes_only_newest_complete_point() -> None:
     with capture_logs() as captured:
         result = await collector.run_once()
 
-    # 2 weekly-строки + 2 daily (история обоих запросов: мок общий)
-    assert result == {"sites_ok": 1, "sites_total": 1, "points_total": 2 + 2}
+    # 2 weekly-строки + по 3 дневных на каждый запрос (дни 3, 2, 1; мок общий)
+    assert result == {"sites_ok": 1, "sites_total": 1, "points_total": 2 + 6}
     site, daily_rows, _ = storage.daily_calls[0]
     assert site == "hist.com"
-    expected_day = (datetime.now(tz=YANDEX_TZ).date() - timedelta(days=1)).isoformat()
-    by_query = {row.query_id: row for row in daily_rows}
-    assert by_query["a1"].date == expected_day  # новейшая завершённая, не сегодня (999)
-    assert by_query["a1"].clicks == 7.0
-    assert by_query["a1"].shows == 200.0
+    day1 = (datetime.now(tz=YANDEX_TZ).date() - timedelta(days=1)).isoformat()
+    day2 = (datetime.now(tz=YANDEX_TZ).date() - timedelta(days=2)).isoformat()
+    day3 = (datetime.now(tz=YANDEX_TZ).date() - timedelta(days=3)).isoformat()
+    a1_by_day = {row.date: row for row in daily_rows if row.query_id == "a1"}
+    assert sorted(a1_by_day) == [day3, day2, day1]  # по возрастанию даты
+    assert a1_by_day[day1].clicks == 7.0  # клик только за день 1
+    assert a1_by_day[day1].shows == 200.0
+    assert a1_by_day[day2].shows == 150.0
+    assert a1_by_day[day2].clicks is None  # клика за день 2 нет — None, не 0
+    assert a1_by_day[day3].shows == 100.0
+    # сегодня (999) не записано нигде
+    today = datetime.now(tz=YANDEX_TZ).date().isoformat()
+    assert all(row.date != today for row in daily_rows)
     collected = [entry for entry in captured if entry["event"] == "webmaster_history_collected"]
     assert len(collected) == 2  # по одному событию на запрос
+    assert all(entry["days"] == 3 for entry in collected)
     assert all("test-token" not in str(entry) for entry in captured)
+
+
+@respx.mock
+async def test_history_retro_correction_rewrites_window() -> None:
+    """Ретро-корректировка Яндекса: значение старого дня перезаписывается
+    следующим прогоном (день, записанный нулём, дозаполняется задним числом)."""
+    mock_user()
+    respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL]))
+    day2 = yandex_iso(2)
+    respx.get(path__regex=HISTORY_ROUTE_RE).mock(
+        side_effect=[
+            # 1-й прогон: день 2 ещё не финализирован Яндексом — 0
+            httpx.Response(
+                200,
+                json={
+                    "query_id": "a1",
+                    "indicators": {"TOTAL_SHOWS": [{"date": day2, "value": 0}]},
+                },
+            ),
+            # 2-й прогон: Яндекс досчитал — 55
+            httpx.Response(
+                200,
+                json={
+                    "query_id": "a1",
+                    "indicators": {"TOTAL_SHOWS": [{"date": day2, "value": 55}]},
+                },
+            ),
+        ]
+    )
+    storage = FakeStorage()
+    collector = make_collector(domain="retro.com", storage=storage)
+
+    await collector.run_once()
+    first = storage.daily_calls[0][1][0]
+    assert first.shows == 0.0
+
+    await collector.run_once()
+    second = storage.daily_calls[1][1][0]
+    assert second.date == first.date  # тот же день окна
+    assert second.shows == 55.0  # перезаписан финализированным значением
+
+
+@respx.mock
+async def test_request_pause_between_history_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Пауза между per-query history-запросами (режим backfill, лимиты API):
+    после каждого запроса топа — sleep(request_pause_seconds), 404-пропуск тоже."""
+    mock_user()
+    a2_query: dict[str, object] = {"query_id": "a2", "query_text": "q", "indicators": {}}
+    respx.get(popular_url()).mock(return_value=popular_response([QUERY_FULL, a2_query]))
+    respx.get(path__regex=HISTORY_ROUTE_RE).mock(
+        side_effect=[
+            httpx.Response(404, json={"error_code": "QUERY_ID_NOT_FOUND"}),
+            httpx.Response(200, json={"indicators": {}}),
+        ]
+    )
+    delays: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    sites = [SiteConfig(domain="pause.com", webmaster_host_id=HOST_ID)]
+    collector = WebmasterCollector(
+        sites,
+        oauth_tokens={"pause.com": "test-token"},
+        timeout_seconds=1.0,
+        request_pause_seconds=0.5,
+    )
+    collector.retry_base_delay = 0
+
+    result = await collector.run_once()
+
+    assert result["sites_ok"] == 1
+    assert delays == [0.5, 0.5]  # после 404-пропуска и после успешного запроса
 
 
 @respx.mock

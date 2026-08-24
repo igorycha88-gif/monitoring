@@ -51,7 +51,8 @@ CREATE TABLE IF NOT EXISTS webmaster_weekly (
     UNIQUE(site, query_id, fetched_at)
 );
 
--- Дневная история per-query (новейшая завершённая точка каждого прогона)
+-- Дневная история per-query (все завершённые дни окна каждого прогона,
+-- фикс 2026-08-24: upsert перезаписывает ретро-корректировки Яндекса)
 CREATE TABLE IF NOT EXISTS webmaster_daily (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     site TEXT NOT NULL,

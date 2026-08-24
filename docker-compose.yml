@@ -17,27 +17,6 @@ services:
     networks:
       - monitoring-net
 
-  # Инфра-пробел (ЧТЗ_Инфра_DevDeps_И_Хост_Тулчейн): dev-контейнер для прогона
-  # pytest/mypy/ruff ВНУТРИ образа. Под profile `dev` — не стартует в обычном `up`.
-  #   docker compose -p monitoring --profile dev run --rm app-dev pytest
-  #   docker compose -p monitoring --profile dev run --rm app-dev mypy .
-  #   docker compose -p monitoring --profile dev run --rm app-dev ruff check .
-  app-dev:
-    build:
-      context: .
-      target: dev
-    image: monitoring-dev
-    container_name: monitoring-app-dev
-    profiles: ["dev"]
-    env_file: .env
-    environment:
-      WEBMASTER_DB_PATH: ${WEBMASTER_DB_PATH:-/var/lib/monitoring/webmaster.db}
-    volumes:
-      - ./config:/srv/config:ro
-      - ./tests:/srv/tests:ro
-    networks:
-      - monitoring-net
-
   prometheus:
     image: prom/prometheus:latest
     container_name: monitoring-prometheus

@@ -201,10 +201,13 @@ class WebmasterStorage:
     # --- Чтение (рендер /metrics из БД, ADR-011 D2) ---
 
     def latest_weekly(self) -> list[WeeklyPoint]:
-        """Последний снапшот каждого (site, query_id) — по MAX(fetched_at).
+        """Последний снапшот КАЖДОГО САЙТА целиком — по MAX(fetched_at) сайта.
 
-        Вечерний прогон перезаписывает утренний того же дня: MAX выбирает
-        актуальные значения.
+        Снапшот /popular — когерентный срез окна Вебмастера на момент прогона:
+        смешение снапшотов разных прогонов завышало бы суммы (запросы, выпавшие
+        из топа, оставались бы в рендере вечно). Вечерний прогон перезаписывает
+        утренний: MAX выбирает актуальный срез; запросы, покинувшие топ,
+        исчезают из рендера вместе со старым снапшотом.
         """
         conn = self._connect()
         try:
@@ -214,7 +217,7 @@ class WebmasterStorage:
                 FROM webmaster_weekly AS w
                 WHERE fetched_at = (
                     SELECT MAX(w2.fetched_at) FROM webmaster_weekly AS w2
-                    WHERE w2.site = w.site AND w2.query_id = w.query_id
+                    WHERE w2.site = w.site
                 )
                 """
             ).fetchall()

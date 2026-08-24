@@ -14,9 +14,9 @@
 │  │  ├── /health        — healthcheck             │          │
 │  │  ├── /metrics       — prometheus_client       │          │
 │  │  ├── /api/v1/sites  — список сайтов           │          │
-│  │  ├── /api/v1/sd/node-exporter — HTTP SD [ЭПИК-6]
-│  │  ├── /api/v1/sd/site-metrics/{kind} — HTTP SD (relay-таргеты) [ЭПИК-9, ADR-010]
-│  │  ├── /api/v1/relay/site-metrics/{kind}/{site} — proxy с персайтным ключом [ADR-010]
+│  │  ├── /api/v1/sd/node-exporter — HTTP SD [ЭПИК-6]          │
+│  │  ├── /api/v1/sd/site-metrics/{kind} — HTTP SD (relay-таргеты) [ЭПИК-9, ADR-010] │
+│  │  ├── /api/v1/relay/site-metrics/{kind}/{site} — proxy с персайтным ключом [ADR-010] │
 │  │  └── APScheduler    — расписание коллекторов  │          │
     │  │   ├── collectors/uptime.py    [ЭПИК-1]    │──▶ HTTP/SSL сайтов
     │  │   ├── collectors/metrika.py   [ЭПИК-2]    │──▶ Яндекс.Метрика API
@@ -232,6 +232,65 @@ monitoring/
 | prometheus | 9091 | TSDB (retention 400d — годовые срезы ADR-008) + правила алертов |
 | alertmanager | 9093 | маршрутизация алертов → Telegram [ЭПИК-7] |
 | grafana | 3300 | визуализация (admin, anonymous off) |
+
+## Прод-справка (актуализовано 2026-08-22)
+
+> Полный runbook: `PRODUCTION.md`. Ниже — архитектурно значимые факты прода.
+
+### Volumes (docker, project=monitoring)
+
+| Volume | Назначение | Последствие потери |
+|---|---|---|
+| `monitoring_monitoring-db` | SQLite Вебмастера (`webmaster.db`, ADR-009/011) | теряется долговременная история поиска |
+| `monitoring_prometheus-data` | TSDB (retention 400d) | теряется вся история метрик |
+| `monitoring_grafana-data` | sqlite Grafana (дашборды также в git, provisioning) | минимально |
+| `monitoring_alertmanager-data` | состояние Alertmanager (nflog/silences) | минимально |
+
+**Важно:** при деплое на чистый сервер volume `monitoring-db` создаётся пустым →
+дашборды Вебмастера «без динамики», хотя сбор работает. Лечение — разовый
+backfill (см. ниже). Именно это дало ложный инцидент «метрики не собираются»
+2026-08-22.
+
+### Расписания сбора (факт прода)
+
+| Коллектор | Расписание | Env |
+|---|---|---|
+| uptime | каждые 60 с | `UPTIME_INTERVAL_SECONDS` |
+| ssl | каждый час | `SSL_INTERVAL_SECONDS` |
+| metrika | каждые 300 с | `METRIKA_INTERVAL_SECONDS` |
+| webmaster | **07:00 и 19:00 МСК** (данные Яндекса обновляются раз в сутки; вечерний прогон дозаполняет лаг, ADR-008) | `WEBMASTER_CRON_HOUR=7,19` |
+| site-metrics (health) | каждые 60 с | — |
+| Prometheus scrape app | 15 с | `prometheus/prometheus.yml` |
+| Рендер search-* из SQLite | фон. поток, 60 с | `WEBMASTER_RENDER_REFRESH_SECONDS` |
+
+### Backfill Вебмастера после свежего деплоя
+
+```bash
+docker exec -e WEBMASTER_HISTORY_DAYS=31 monitoring-app \
+    python scripts/backfill_webmaster_daily.py   # окно 31 день (max API), upsert
+```
+
+### Диагностика типовых «нет данных» (уроки 2026-08-22)
+
+1. **Метрика = 0 визитов, коллектор success=1** — токен валиден, API отдаёт
+   пустой отчёт как данные. Проверить, установлен ли тег счётчика на САЙТЕ
+   (`curl -s https://<домен> | grep -c mc.yandex`). Тест доступа токена:
+   чужой счётчик → 404, свой → 200 (Management API `/counters` может отдавать
+   пусто даже при валидном токене — 403-особенность прав, не признак отказа).
+2. **Дашборды Вебмастера без истории** → `SELECT MIN(date) FROM webmaster_daily`
+   в контейнере; мало дней → backfill (выше).
+3. **`monitoring_search_daily_*` только один день** — так задумано (ADR-011):
+   gauge рендерит последний завершённый день; многодневная динамика —
+   range-история в Prometheus + разовый promtool-импорт
+   (`scripts/export_webmaster_history.py`).
+4. **Скрипт полной верификации** (коллекторы → Prometheus → Grafana):
+   `python3 scripts/verify_prod.py` на VPS.
+
+### Errata имён метрик
+
+Исторические ЧТЗ могут содержать `monitoring_ssl_cert_days_left` —
+реальное имя: **`monitoring_ssl_days_left`** (`app/metrics.py`, дашборды,
+alerts.yml). Живой источник имён — `app/metrics.py` + `tests/test_dashboards.py`.
 
 ## Запуск и проверки
 

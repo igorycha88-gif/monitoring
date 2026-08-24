@@ -21,7 +21,7 @@ QUERY_LABEL_MAX_LENGTH = 100
 TOP_QUERIES_LIMIT = 100
 HISTORY_DAYS_LIMIT = 31
 # Даты в ответах Вебмастера — в таймзоне Яндекса (+03:00); «сегодня» в ней
-# всегда неполное (нули) — исключается при выборе новейшей точки (ADR-008).
+# всегда неполное (нули) — исключается из дневных рядов (ADR-008).
 YANDEX_TZ = ZoneInfo("Europe/Moscow")
 
 QUERY_INDICATORS = ("TOTAL_SHOWS", "TOTAL_CLICKS", "AVG_SHOW_POSITION")
@@ -73,13 +73,6 @@ class QueryStats(NamedTuple):
     position: float | None
 
 
-class DailyValue(NamedTuple):
-    """Значение индикатора за последний завершённый день (ADR-008)."""
-
-    date: str
-    value: float
-
-
 def _number(value: Any) -> float | None:
     """Число из JSON или None (bool — не число, мусор — не число)."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -112,6 +105,7 @@ class WebmasterCollector(BaseCollector):
         api_base: str = WEBMASTER_API_BASE,
         history_days: int = 7,
         storage: WebmasterStorage | None = None,
+        request_pause_seconds: float = 0.0,
     ) -> None:
         super().__init__(sites)
         all_sites = self.sites
@@ -127,6 +121,9 @@ class WebmasterCollector(BaseCollector):
         self.user_url = f"{self.api_base}/user"
         self.history_days = max(1, min(history_days, HISTORY_DAYS_LIMIT))
         self.storage = storage
+        # Пауза между per-query history-запросами (лимиты API): 0 — штатный
+        # режим (прогон раз в полдня), >0 — backfill с широким окном.
+        self.request_pause_seconds = max(0.0, request_pause_seconds)
         self._user_ids: dict[str, int] = {}
         self.logger.info(
             "webmaster_collector_init",
@@ -136,6 +133,7 @@ class WebmasterCollector(BaseCollector):
             history_days=self.history_days,
             per_site_tokens=len(self.oauth_tokens),
             storage_enabled=storage is not None,
+            request_pause_seconds=self.request_pause_seconds,
         )
 
     async def collect_site(self, site: SiteConfig) -> int:
@@ -325,9 +323,11 @@ class WebmasterCollector(BaseCollector):
     ) -> int:
         """Дневная история каждого запроса топа в SQLite (per-query, ADR-008 D1).
 
-        В штатном режиме пишется только новейшая завершённая (не сегодняшняя)
-        точка каждого индикатора — ежедневный запуск накапливает ряды в БД
-        (полное окно историй загружает backfill-скрипт). 404 на конкретный
+        Пишутся ВСЕ завершённые дни окна history_days: агрегаты Яндекса
+        финализируются с лагом более суток, поэтому день, записанный нулём
+        утром, перезаписывается дозаполненным значением следующими прогонами
+        (upsert по site+query_id+date; инцидент 2026-08-24 «нули 21–23 авг»).
+        Сегодняшний (незавершённый) день исключается. 404 на конкретный
         запрос (выпал из выдачи между /popular и /history) — пропуск, не
         ошибка сайта; остальные ошибки после ретраев — ошибка сайта.
         Возвращает число строк, переданных в БД.
@@ -349,18 +349,25 @@ class WebmasterCollector(BaseCollector):
                     query=row.query,
                     error=str(exc),
                 )
+                if self.request_pause_seconds > 0:
+                    await asyncio.sleep(self.request_pause_seconds)
                 continue
-            daily_row = self._to_daily_row(row, history)
-            if daily_row is not None:
-                daily_rows.append(daily_row)
+            query_rows = self._to_daily_rows(row, history)
+            if query_rows:
+                daily_rows.extend(query_rows)
+                newest = query_rows[-1]
                 self.logger.info(
                     "webmaster_history_collected",
                     site=domain,
+                    host_id=host_id,
                     query=row.query,
-                    clicks=daily_row.clicks,
-                    shows=daily_row.shows,
-                    date=daily_row.date,
+                    days=len(query_rows),
+                    newest_date=newest.date,
+                    newest_clicks=newest.clicks,
+                    newest_shows=newest.shows,
                 )
+            if self.request_pause_seconds > 0:
+                await asyncio.sleep(self.request_pause_seconds)
         await self._save_daily_safe(domain, daily_rows)
         self.logger.info(
             "webmaster_history_done",
@@ -373,31 +380,30 @@ class WebmasterCollector(BaseCollector):
 
     async def _fetch_history_with_retry(
         self, user_id: int, host_id: str, query_id: str, token: str
-    ) -> dict[str, DailyValue]:
+    ) -> dict[str, dict[str, float]]:
         """История одного запроса с ретраями (единый паттерн коллектора)."""
         return await self.retry(
             lambda: self._fetch_query_history(user_id, host_id, query_id, token),
             retry_on=WEBMASTER_RETRYABLE,
         )
 
-    def _to_daily_row(self, row: QueryStats, history: dict[str, DailyValue]) -> DailyRow | None:
-        """DailyRow из истории запроса; None — завершённых точек нет (не пишем)."""
-        clicks = history.get("TOTAL_CLICKS")
-        shows = history.get("TOTAL_SHOWS")
-        if clicks is None and shows is None:
-            return None
-        raw_date = clicks.date if clicks is not None else shows.date if shows is not None else ""
-        try:
-            day = datetime.fromisoformat(raw_date).date().isoformat()
-        except ValueError:
-            day = raw_date[:10]
-        return DailyRow(
-            query_id=row.query_id,
-            query=row.query,
-            date=day,
-            clicks=None if clicks is None else clicks.value,
-            shows=None if shows is None else shows.value,
-        )
+    def _to_daily_rows(
+        self, row: QueryStats, history: dict[str, dict[str, float]]
+    ) -> list[DailyRow]:
+        """DailyRow на каждый завершённый день окна; пусто — завершённых дней нет."""
+        clicks = history.get("TOTAL_CLICKS", {})
+        shows = history.get("TOTAL_SHOWS", {})
+        days = sorted(set(clicks) | set(shows))
+        return [
+            DailyRow(
+                query_id=row.query_id,
+                query=row.query,
+                date=day,
+                clicks=clicks.get(day),
+                shows=shows.get(day),
+            )
+            for day in days
+        ]
 
     def _history_range(self) -> tuple[str, str]:
         """Окно дат history-запросов: последние history_days дней включая сегодня."""
@@ -408,10 +414,11 @@ class WebmasterCollector(BaseCollector):
 
     async def _fetch_query_history(
         self, user_id: int, host_id: str, query_id: str, token: str
-    ) -> dict[str, DailyValue]:
+    ) -> dict[str, dict[str, float]]:
         """GET .../search-queries/{query_id}/history — дневные показатели запроса.
 
-        Возвращает {индикатор: новейшая завершённая точка}. Индикатор,
+        Возвращает {индикатор: {день: значение}} — ВСЕ завершённые дни окна
+        (ретро-корректировки Яндекса подхватываются upsert'ом). Индикатор,
         отсутствующий в ответе или без завершённых дней, в словарь не
         попадает (метрика не пишется).
         """
@@ -451,37 +458,36 @@ class WebmasterCollector(BaseCollector):
 
     def _parse_query_history(
         self, payload: Any, host_id: str, query_id: str
-    ) -> dict[str, DailyValue]:
-        """Разбирает ответ per-query history: индикатор → новейшая завершённая точка."""
+    ) -> dict[str, dict[str, float]]:
+        """Разбирает ответ per-query history: индикатор → ряды завершённых дней."""
         if not isinstance(payload, dict) or not isinstance(payload.get("indicators"), dict):
             raise WebmasterApiError(
                 f"Вебмастер: нет indicators в истории запроса {query_id} для {host_id}: {payload!r}"
             )
         today_yandex = datetime.now(tz=YANDEX_TZ).date()
-        result: dict[str, DailyValue] = {}
+        result: dict[str, dict[str, float]] = {}
         for indicator in HISTORY_INDICATORS:
             points = payload["indicators"].get(indicator)
             if points is None:
                 continue  # индикатор не определён (документировано API)
-            newest = self._newest_complete_point(points, indicator, query_id, today_yandex)
-            if newest is not None:
-                result[indicator] = newest
+            series = self._complete_points(points, indicator, query_id, today_yandex)
+            if series:
+                result[indicator] = series
         return result
 
-    def _newest_complete_point(
+    def _complete_points(
         self,
         points: Any,
         indicator: str,
         query_id: str,
         today_yandex: date,
-    ) -> DailyValue | None:
-        """Новейшая точка индикатора С ИСКЛЮЧЕНИЕМ незавершённого сегодня."""
+    ) -> dict[str, float]:
+        """Точки индикатора всех ЗАВЕРШЁННЫХ дней С ИСКЛЮЧЕНИЕМ незавершённого сегодня."""
         if not isinstance(points, list):
             raise WebmasterApiError(
                 f"Вебмастер: {indicator} не список в истории запроса {query_id}"
             )
-        newest: DailyValue | None = None
-        newest_dt: datetime | None = None
+        series: dict[str, float] = {}
         for item in points:
             if not isinstance(item, dict):
                 raise WebmasterApiError(
@@ -501,10 +507,8 @@ class WebmasterCollector(BaseCollector):
                 ) from exc
             if point_dt.date() >= today_yandex:
                 continue  # сегодняшний (незавершённый) день всегда нули
-            if newest_dt is None or point_dt > newest_dt:
-                newest_dt = point_dt
-                newest = DailyValue(date=point_date, value=value)
-        return newest
+            series[point_dt.date().isoformat()] = value
+        return series
 
     def _raise_for_status(
         self,

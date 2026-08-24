@@ -22,8 +22,6 @@ sites:
   #     content: https://example.com/metrics/content
   #     node: https://example.com/metrics/node
   #     postgres: https://example.com/metrics/postgres
-  - domain: example.com
-  - domain: example.org
   - domain: da-dryclean.ru
     webmaster_host_id: "https:da-dryclean.ru:443"
     metrics_urls:

@@ -41,7 +41,7 @@
 
 **РАЗРЕШЕНО ТОЛЬКО:**
 - Своя директория: `/root/monitoring/`
-- Свои порты: app `8088`, Prometheus `9091`, Grafana `3300` (ВСЕ на `127.0.0.1`)
+- Свои порты: app `8088`, Prometheus `9091`, Grafana `3300`, Alertmanager `9093` (ВСЕ на `127.0.0.1`)
 - Свои контейнеры с префиксом `monitoring-*`, своя docker-network `monitoring-net`
 - Свой compose project: `docker compose -p monitoring`
 
@@ -438,6 +438,9 @@ DevOps **ВСЕГДА** делает **ПОЛНУЮ пересборку ВСЕ�
 | monitoring-app (API + /metrics) | 8088 | SSH-туннель |
 | Prometheus | 9091 | SSH-туннель |
 | Grafana | 3300 | SSH-туннель |
+| Alertmanager | 9093 | SSH-туннель |
+
+Полный runbook прода (volumes, расписания, процедуры, диагностика): `PRODUCTION.md`.
 
 ---
 
