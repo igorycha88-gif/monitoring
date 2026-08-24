@@ -19,6 +19,13 @@ DASHBOARD_NAMES = (
     "webmaster.json",
 )
 
+# Персайтные дашборды бизнес-метрик (ЧТЗ_Персайтные_дашборды_бизнес-метрик):
+# файл → домен. Метрики приложения сайта (не monitoring_*) фиксируются
+# структурным тестом; каждый expr обязан фильтроваться по site="<домен>".
+PER_SITE_DASHBOARDS: dict[str, str] = {
+    "site-zabor-analytics.json": "zabor-i-naves.ru",
+}
+
 # Белый список собираем из реестра приложения (app/metrics.py) и имён
 # рендера из БД (app/webmaster_export.py — ADR-011), чтобы тест не
 # разошёлся с реальными метриками.
@@ -58,14 +65,15 @@ def variable_queries(dashboard: dict[str, Any]) -> list[str]:
 
 def test_dashboards_valid_json_with_required_fields() -> None:
     uids = set()
-    for name in DASHBOARD_NAMES:
+    for name in DASHBOARD_NAMES + tuple(PER_SITE_DASHBOARDS):
         dashboard = load_dashboard(name)
         assert dashboard["uid"], f"{name}: пустой uid"
         assert dashboard["uid"] not in uids
         uids.add(dashboard["uid"])
         assert dashboard["title"], f"{name}: пустой title"
         assert isinstance(dashboard["schemaVersion"], int)
-        assert dashboard["templating"]["list"], f"{name}: нет переменных"
+        if name in DASHBOARD_NAMES:
+            assert dashboard["templating"]["list"], f"{name}: нет переменных"
 
 
 def test_all_expr_metrics_are_known() -> None:
@@ -88,7 +96,8 @@ def test_no_rate_or_increase_on_project_metrics() -> None:
     # Метрики проекта monitoring_* — gauge: rate()/increase() недопустимы.
     # sum_over_time по gauge суммирует семплы скрейпов — завышение (ADR-008 D3).
     # node_* (node_exporter, ЭПИК-6) — counter: rate() для них разрешён (ADR-005).
-    for name in DASHBOARD_NAMES:
+    # Счётчики приложения сайта (персайтные дашборды) — counter: rate() разрешён.
+    for name in DASHBOARD_NAMES + tuple(PER_SITE_DASHBOARDS):
         for expr in panel_exprs(load_dashboard(name)):
             for forbidden in ("rate(", "increase(", "sum_over_time("):
                 if forbidden in expr:
@@ -97,6 +106,7 @@ def test_no_rate_or_increase_on_project_metrics() -> None:
 
 def test_threshold_steps_sorted_ascending() -> None:
     # Регрессия BUG-001: Grafana требует возрастающие значения шагов порогов
+
     def walk(obj: Any) -> None:
         if isinstance(obj, dict):
             thresholds = obj.get("thresholds")
@@ -110,16 +120,45 @@ def test_threshold_steps_sorted_ascending() -> None:
             for item in obj:
                 walk(item)
 
-    for name in DASHBOARD_NAMES:
+    for name in DASHBOARD_NAMES + tuple(PER_SITE_DASHBOARDS):
         walk(load_dashboard(name))
 
 
 def test_panels_use_provisioned_prometheus_datasource() -> None:
-    for name in DASHBOARD_NAMES:
+    for name in DASHBOARD_NAMES + tuple(PER_SITE_DASHBOARDS):
         for panel in load_dashboard(name)["panels"]:
             assert panel["datasource"]["uid"] == "prometheus", f"{name}: панель без datasource"
             for target in panel.get("targets", []):
-                assert target["datasource"]["uid"] == "prometheus", f"{name}: target без datasource"
+                if target.get("expr"):
+                    ds = target["datasource"]["uid"]
+                    assert ds == "prometheus", f"{name}: target без datasource"
+
+
+def test_per_site_dashboards_filter_by_site_label() -> None:
+    """Персайтные дашборды: каждый expr фильтруется по site="<домен>" (ЧТЗ)."""
+    for name, site in PER_SITE_DASHBOARDS.items():
+        dashboard = load_dashboard(name)
+        exprs = panel_exprs(dashboard)
+        assert exprs, f"{name}: нет expr"
+        for expr in exprs:
+            assert f'site="{site}"' in expr, f"{name}: expr без фильтра site: {expr!r}"
+
+
+def test_site_zabor_analytics_structure() -> None:
+    """Перенос user-analytics-fences «в таком же виде»: 9 панелей, метрики сайта."""
+    dashboard = load_dashboard("site-zabor-analytics.json")
+    assert dashboard["uid"] == "site-zabor-analytics"
+    assert len(dashboard["panels"]) == 9
+    by_type = {panel["type"] for panel in dashboard["panels"]}
+    assert "piechart" in by_type
+    exprs = "\n".join(panel_exprs(dashboard))
+    for metric in (
+        "analytics_events_total",
+        "page_views_total",
+        "calculator_events_total",
+        "conversion_funnel_total",
+    ):
+        assert metric in exprs, metric
 
 
 def test_site_overview_structure() -> None:

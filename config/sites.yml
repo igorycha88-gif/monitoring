@@ -42,3 +42,14 @@ sites:
       content: https://эвакуация.online/metrics/content
       node: https://эвакуация.online/metrics/node
       postgres: https://эвакуация.online/metrics/postgres
+  # zabor-i-naves.ru (ЧТЗ_Подключение_zabor-i-naves v1.0): полный пакет.
+  # Токены Метрики/Вебмастера и site-metrics эндпоинты — на стороне владельца
+  # (парное ЧТЗ в репо сайта); до готовности site-* up=0 (404) — норма.
+  - domain: zabor-i-naves.ru
+    metrika_counter_id: 108488683
+    webmaster_host_id: "https:zabor-i-naves.ru:443"
+    metrics_urls:
+      tracking: https://zabor-i-naves.ru/metrics/tracking
+      content: https://zabor-i-naves.ru/metrics/content
+      node: https://zabor-i-naves.ru/metrics/node
+      postgres: https://zabor-i-naves.ru/metrics/postgres

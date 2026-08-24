@@ -1,0 +1,848 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisLabel": "События",
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "none",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [
+            {
+              "options": {
+                "page_view": {
+                  "color": "blue",
+                  "index": 0,
+                  "text": "Просмотр страницы"
+                },
+                "calculator_open": {
+                  "color": "green",
+                  "index": 1,
+                  "text": "Открытие калькулятора"
+                },
+                "calculator_fence_type_select": {
+                  "color": "green",
+                  "index": 2,
+                  "text": "Выбор типа забора"
+                },
+                "calculator_configure": {
+                  "color": "green",
+                  "index": 3,
+                  "text": "Настройка параметров"
+                },
+                "calculator_calculate": {
+                  "color": "green",
+                  "index": 4,
+                  "text": "Расчёт стоимости"
+                },
+                "calculator_export": {
+                  "color": "green",
+                  "index": 5,
+                  "text": "Экспорт расчёта"
+                },
+                "portfolio_view": {
+                  "color": "orange",
+                  "index": 6,
+                  "text": "Просмотр портфолио"
+                },
+                "portfolio_item_click": {
+                  "color": "orange",
+                  "index": 7,
+                  "text": "Клик по работе"
+                },
+                "contacts_view": {
+                  "color": "purple",
+                  "index": 8,
+                  "text": "Просмотр контактов"
+                },
+                "contact_form_submit": {
+                  "color": "red",
+                  "index": 9,
+                  "text": "Отправка заявки"
+                },
+                "services_view": {
+                  "color": "yellow",
+                  "index": 10,
+                  "text": "Просмотр услуг"
+                },
+                "phone_click": {
+                  "color": "cyan",
+                  "index": 11,
+                  "text": "Клик по телефону"
+                },
+                "exit": {
+                  "color": "gray",
+                  "index": 12,
+                  "text": "Завершение сессии"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (event_name) (rate(analytics_events_total{site=\"zabor-i-naves.ru\"}[5m]) * 60)",
+          "legendFormat": "{{event_name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "События аналитики (в минуту)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisLabel": "Просмотры",
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "calcs": [
+            "sum"
+          ],
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "rate(page_views_total{site=\"zabor-i-naves.ru\"}[5m]) * 60",
+          "legendFormat": "{{page}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Просмотры страниц (в минуту)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisLabel": "Действия",
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "none",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "calcs": [
+            "sum"
+          ],
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "rate(calculator_events_total{site=\"zabor-i-naves.ru\"}[5m]) * 60",
+          "legendFormat": "{{action}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Действия в калькуляторе (в минуту)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "mappings": [
+            {
+              "options": {
+                "page_view": {
+                  "color": "blue",
+                  "index": 0,
+                  "text": "Просмотр страницы"
+                },
+                "calculator_open": {
+                  "color": "green",
+                  "index": 1,
+                  "text": "Открытие калькулятора"
+                },
+                "calculator_fence_type_select": {
+                  "color": "green",
+                  "index": 2,
+                  "text": "Выбор типа забора"
+                },
+                "calculator_configure": {
+                  "color": "green",
+                  "index": 3,
+                  "text": "Настройка параметров"
+                },
+                "calculator_calculate": {
+                  "color": "green",
+                  "index": 4,
+                  "text": "Расчёт стоимости"
+                },
+                "calculator_export": {
+                  "color": "green",
+                  "index": 5,
+                  "text": "Экспорт расчёта"
+                },
+                "portfolio_view": {
+                  "color": "orange",
+                  "index": 6,
+                  "text": "Просмотр портфолио"
+                },
+                "portfolio_item_click": {
+                  "color": "orange",
+                  "index": 7,
+                  "text": "Клик по работе"
+                },
+                "contacts_view": {
+                  "color": "purple",
+                  "index": 8,
+                  "text": "Просмотр контактов"
+                },
+                "contact_form_submit": {
+                  "color": "red",
+                  "index": 9,
+                  "text": "Отправка заявки"
+                },
+                "services_view": {
+                  "color": "yellow",
+                  "index": 10,
+                  "text": "Просмотр услуг"
+                },
+                "phone_click": {
+                  "color": "cyan",
+                  "index": 11,
+                  "text": "Клик по телефону"
+                },
+                "exit": {
+                  "color": "gray",
+                  "index": 12,
+                  "text": "Завершение сессии"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "values": [
+            "value",
+            "percent"
+          ]
+        },
+        "pieType": "donut",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (event_name) (increase(analytics_events_total{site=\"zabor-i-naves.ru\"}[1h]))",
+          "legendFormat": "{{event_name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Распределение событий за последний час",
+      "type": "piechart"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisLabel": "Пользователи",
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "none",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [
+            {
+              "options": {
+                "page_view": {
+                  "color": "blue",
+                  "index": 0,
+                  "text": "Просмотр страницы"
+                },
+                "calculator_open": {
+                  "color": "green",
+                  "index": 1,
+                  "text": "Открытие калькулятора"
+                },
+                "calculator_configure": {
+                  "color": "green",
+                  "index": 2,
+                  "text": "Настройка параметров"
+                },
+                "calculator_calculate": {
+                  "color": "green",
+                  "index": 3,
+                  "text": "Расчёт стоимости"
+                },
+                "contact_form_submit": {
+                  "color": "red",
+                  "index": 4,
+                  "text": "Отправка заявки"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "calcs": [
+            "sum"
+          ],
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (step) (increase(conversion_funnel_total{site=\"zabor-i-naves.ru\"}[1h]))",
+          "legendFormat": "{{step}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Воронка конверсии",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 24
+      },
+      "id": 6,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(analytics_events_total{site=\"zabor-i-naves.ru\",event_name=\"page_view\"}[24h]))",
+          "legendFormat": "Просмотры",
+          "refId": "A"
+        }
+      ],
+      "title": "Просмотры за 24ч",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 24
+      },
+      "id": 7,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(analytics_events_total{site=\"zabor-i-naves.ru\",event_name=\"calculator_calculate\"}[24h]))",
+          "legendFormat": "Расчёты",
+          "refId": "A"
+        }
+      ],
+      "title": "Расчёты в калькуляторе за 24ч",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "orange",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 24
+      },
+      "id": 8,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(analytics_events_total{site=\"zabor-i-naves.ru\",event_name=\"contact_form_submit\"}[24h]))",
+          "legendFormat": "Заявки",
+          "refId": "A"
+        }
+      ],
+      "title": "Заявки за 24ч",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "purple",
+                "value": null
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 24
+      },
+      "id": 9,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(conversion_funnel_total{site=\"zabor-i-naves.ru\",step=\"contact_form_submit\"}[24h])) / sum(increase(conversion_funnel_total{site=\"zabor-i-naves.ru\",step=\"page_view\"}[24h]))",
+          "legendFormat": "Конверсия",
+          "refId": "A"
+        }
+      ],
+      "title": "Конверсия (просмотр → заявка)",
+      "type": "stat"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": [
+    "analytics",
+    "fences",
+    "per-site",
+    "user-behavior",
+    "zabor-i-naves.ru"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "User Analytics — zabor-i-naves.ru",
+  "uid": "site-zabor-analytics",
+  "description": "Персайтный дашборд бизнес-метрик (перенос user-analytics-fences). Источник: job site-content (relay /metrics/content, ADR-010). Панели без данных до включения эндпоинта на сайте — норма.",
+  "refresh": "30s"
+}
