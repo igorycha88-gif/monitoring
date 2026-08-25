@@ -43,17 +43,32 @@ def test_webmaster_history_days_default() -> None:
     assert settings.webmaster_history_days == 7
     assert settings.webmaster_render_days == 35
     assert settings.webmaster_render_refresh_seconds == 60.0
+    assert settings.webmaster_render_lag_days == 2
 
 
 def test_webmaster_render_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """ADR-011: окно рендера и период обновления кэша задаются из env."""
     monkeypatch.setenv("WEBMASTER_RENDER_DAYS", "60")
     monkeypatch.setenv("WEBMASTER_RENDER_REFRESH_SECONDS", "5.5")
+    monkeypatch.setenv("WEBMASTER_RENDER_LAG_DAYS", "3")
 
     settings = Settings(_env_file=None)
 
     assert settings.webmaster_render_days == 60
     assert settings.webmaster_render_refresh_seconds == 5.5
+    assert settings.webmaster_render_lag_days == 3
+
+
+def test_webmaster_render_lag_days_must_be_positive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Горизонт готовности 0 — запрет: рендер вернёт «вечный ноль»."""
+    import pydantic
+
+    monkeypatch.setenv("WEBMASTER_RENDER_LAG_DAYS", "0")
+
+    with pytest.raises(pydantic.ValidationError):
+        Settings(_env_file=None)
 
 
 def test_webmaster_history_days_env_override(monkeypatch: pytest.MonkeyPatch) -> None:

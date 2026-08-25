@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     # граница кардинальности) и период фонового обновления кэша (сек)
     webmaster_render_days: int = 35
     webmaster_render_refresh_seconds: float = 60.0
+    # Горизонт готовности дневного рендера (дни): агрегаты Яндекса
+    # финализируются с лагом более суток — самый свежий завершённый день
+    # всегда нули; рендерится последний день старше этого лага
+    # (инцидент 2026-08-25 «вечный ноль дневных метрик»)
+    webmaster_render_lag_days: Annotated[int, Field(ge=1)] = 2
 
     yandex_metrika_oauth_token: str = ""
     yandex_webmaster_oauth_token: str = ""

@@ -1,13 +1,13 @@
 """Тесты WebmasterExporter: рендер поисковых метрик из SQLite (ADR-011)."""
 
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from prometheus_client import CollectorRegistry, generate_latest
 
 from app.storage import DailyRow, WebmasterStorage, WeeklyRow
-from app.webmaster_export import METRIC_NAMES, WebmasterExporter
+from app.webmaster_export import METRIC_NAMES, YANDEX_TZ, WebmasterExporter
 
 
 def make_storage(tmp_path: Path) -> WebmasterStorage:
@@ -17,7 +17,8 @@ def make_storage(tmp_path: Path) -> WebmasterStorage:
 
 
 def today_minus(days: int) -> str:
-    return (datetime.now(tz=UTC).date() - timedelta(days=days)).isoformat()
+    """Дата в таймзоне Яндекса: refresh считает «сегодня» по ней же."""
+    return (datetime.now(tz=YANDEX_TZ).date() - timedelta(days=days)).isoformat()
 
 
 def render(exporter: WebmasterExporter) -> str:
@@ -33,7 +34,7 @@ def test_renders_weekly_and_daily_from_db(tmp_path: Path) -> None:
         [WeeklyRow("a1", "купить слона", shows=1000.0, clicks=50.0, position=3.5)],
         "2026-08-20T07:00:00+00:00",
     )
-    storage.save_daily("w.com", [DailyRow("a1", "купить слона", today_minus(1), 7.0, 200.0)], "t1")
+    storage.save_daily("w.com", [DailyRow("a1", "купить слона", today_minus(2), 7.0, 200.0)], "t1")
     exporter = WebmasterExporter(storage, render_days=35, refresh_seconds=60)
     weekly_size, daily_size = exporter.refresh()
 
@@ -92,7 +93,7 @@ def test_empty_db_renders_nothing(tmp_path: Path) -> None:
 def test_render_window_excludes_stale_queries(tmp_path: Path) -> None:
     """Запросы без точек в окне рендера не отдаются (кардинальность, D2)."""
     storage = make_storage(tmp_path)
-    storage.save_daily("w.com", [DailyRow("a1", "свежий", today_minus(1), 1.0, 10.0)], "t")
+    storage.save_daily("w.com", [DailyRow("a1", "свежий", today_minus(2), 1.0, 10.0)], "t")
     storage.save_daily("w.com", [DailyRow("a2", "старый", today_minus(40), 2.0, 20.0)], "t")
     exporter = WebmasterExporter(storage, render_days=35)
     weekly_size, daily_size = exporter.refresh()
@@ -101,6 +102,33 @@ def test_render_window_excludes_stale_queries(tmp_path: Path) -> None:
     text = render(exporter)
     assert 'monitoring_search_daily_clicks{query="свежий",site="w.com"} 1.0' in text
     assert 'monitoring_search_daily_clicks{query="старый"' not in text
+
+
+def test_render_lag_skips_unfinalized_day(tmp_path: Path) -> None:
+    """Горизонт готовности (инцидент 2026-08-25 «вечный ноль»): вчерашний
+    день ещё нулевой в API Яндекса — рендерится позавчерашний, готовый."""
+    storage = make_storage(tmp_path)
+    storage.save_daily("w.com", [DailyRow("a1", "слон", today_minus(2), 12.0, 340.0)], "t1")
+    # Незафинализированный «вчера»: записан последним прогоном нулями
+    storage.save_daily("w.com", [DailyRow("a1", "слон", today_minus(1), 0.0, 0.0)], "t2")
+    exporter = WebmasterExporter(storage, lag_days=2)
+    weekly_size, daily_size = exporter.refresh()
+
+    assert (weekly_size, daily_size) == (0, 1)
+    text = render(exporter)
+    assert 'monitoring_search_daily_shows{query="слон",site="w.com"} 340.0' in text
+    assert 'monitoring_search_daily_clicks{query="слон",site="w.com"} 12.0' in text
+
+
+def test_render_lag_excludes_queries_with_only_unready_days(tmp_path: Path) -> None:
+    """Запрос с единственной (незафинализированной) точкой не рендерится."""
+    storage = make_storage(tmp_path)
+    storage.save_daily("w.com", [DailyRow("a1", "новичок", today_minus(1), 0.0, 0.0)], "t")
+    exporter = WebmasterExporter(storage)
+    weekly_size, daily_size = exporter.refresh()
+
+    assert (weekly_size, daily_size) == (0, 0)
+    assert render(exporter) == ""
 
 
 def test_refresh_error_keeps_last_cache(tmp_path: Path) -> None:

@@ -235,11 +235,14 @@ class WebmasterStorage:
             for site, query_id, query, shows, clicks, position in rows
         ]
 
-    def latest_daily(self, since_date: str) -> list[DailyPoint]:
-        """Последняя дата каждого (site, query_id) не раньше since_date.
+    def latest_daily(self, since_date: str, until_date: str) -> list[DailyPoint]:
+        """Последняя ГОТОВАЯ дата каждого (site, query_id) в окне [since, until].
 
-        Запросы, не появлявшиеся в окне рендера, не отдаются — кардинальность
-        ограничена окном (ADR-011 D2).
+        until_date — горизонт готовности (лаг финализации агрегатов Яндекса,
+        инцидент 2026-08-25 «вечный ноль»): самый свежий завершённый день
+        всегда записан нулями, рендерить его нельзя — MAX(date) считается
+        только среди дат <= until_date. Запросы, не появлявшиеся в окне
+        рендера, не отдаются — кардинальность ограничена окном (ADR-011 D2).
         """
         conn = self._connect()
         try:
@@ -247,13 +250,14 @@ class WebmasterStorage:
                 """
                 SELECT site, query_id, query, date, clicks, shows
                 FROM webmaster_daily AS w
-                WHERE date >= ?
+                WHERE date >= ? AND date <= ?
                   AND date = (
                       SELECT MAX(w2.date) FROM webmaster_daily AS w2
                       WHERE w2.site = w.site AND w2.query_id = w.query_id
+                        AND w2.date <= ?
                   )
                 """,
-                (since_date,),
+                (since_date, until_date, until_date),
             ).fetchall()
         finally:
             conn.close()

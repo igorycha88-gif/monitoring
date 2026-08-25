@@ -10,7 +10,8 @@ scrape — шум out-of-order).
 
 import threading
 from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from prometheus_client.core import GaugeMetricFamily
 from prometheus_client.registry import Collector, CollectorRegistry
@@ -22,6 +23,10 @@ from app.storage import DailyPoint, WebmasterStorage, WeeklyPoint
 logger = get_logger("app.webmaster_export")
 
 SOURCE = "webmaster-export"
+
+# Дни Вебмастера — в таймзоне Яндекса (+03:00): «сегодня» для горизонта
+# готовности считается по ней же.
+YANDEX_TZ = ZoneInfo("Europe/Moscow")
 
 # Имена метрик рендера (белый список дашбордов, tests/test_dashboards.py).
 METRIC_NAMES: frozenset[str] = frozenset(
@@ -47,10 +52,15 @@ class WebmasterExporter(Collector):
         storage: WebmasterStorage,
         render_days: int = 35,
         refresh_seconds: float = 60.0,
+        lag_days: int = 2,
     ) -> None:
         self.storage = storage
         self.render_days = max(1, render_days)
         self.refresh_seconds = max(0.1, refresh_seconds)
+        # Горизонт готовности: агрегаты Яндекса финализируются с лагом
+        # более суток, поэтому рендерится последний день старше lag_days
+        # (инцидент 2026-08-25 «вечный ноль дневных метрик»).
+        self.lag_days = max(1, lag_days)
         self._lock = threading.Lock()
         self._weekly: list[WeeklyPoint] = []
         self._daily: list[DailyPoint] = []
@@ -87,13 +97,15 @@ class WebmasterExporter(Collector):
                 position.add_metric([row.site, row.query], row.position)
         daily_clicks = _gauge(
             "monitoring_search_daily_clicks",
-            "Клики по поисковому запросу за последний ЗАВЕРШЁННЫЙ день; "
-            "сумма по запросам = сайт; gauge — без rate()",
+            "Клики по поисковому запросу за последний ГОТОВЫЙ день (лаг "
+            "финализации агрегатов Яндекса ~2 суток); сумма по запросам = "
+            "сайт; gauge — без rate()",
         )
         daily_shows = _gauge(
             "monitoring_search_daily_shows",
-            "Показы по поисковому запросу за последний ЗАВЕРШЁННЫЙ день; "
-            "сумма по запросам = сайт; gauge — без rate()",
+            "Показы по поисковому запросу за последний ГОТОВЫЙ день (лаг "
+            "финализации агрегатов Яндекса ~2 суток); сумма по запросам = "
+            "сайт; gauge — без rate()",
         )
         for point in daily:
             if point.clicks is not None:
@@ -113,10 +125,17 @@ class WebmasterExporter(Collector):
         Ошибка чтения НЕ поднимается наружу цикла потока — обрабатывается
         в _refresh_safe.
         """
-        today = datetime.now(tz=UTC).date()
+        today = datetime.now(tz=YANDEX_TZ).date()
         since_date = (today - timedelta(days=self.render_days)).isoformat()
+        until_date = (today - timedelta(days=self.lag_days)).isoformat()
         weekly = self.storage.latest_weekly()
-        daily = self.storage.latest_daily(since_date)
+        daily = self.storage.latest_daily(since_date, until_date)
+        logger.debug(
+            "webmaster_render_window",
+            source=SOURCE,
+            since=since_date,
+            until=until_date,
+        )
         with self._lock:
             self._weekly = weekly
             self._daily = daily
@@ -165,6 +184,7 @@ class WebmasterExporter(Collector):
             "webmaster_export_started",
             source=SOURCE,
             render_days=self.render_days,
+            lag_days=self.lag_days,
             refresh_seconds=self.refresh_seconds,
         )
 

@@ -76,6 +76,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 webmaster_storage,
                 render_days=settings.webmaster_render_days,
                 refresh_seconds=settings.webmaster_render_refresh_seconds,
+                lag_days=settings.webmaster_render_lag_days,
             )
             register_webmaster_exporter(webmaster_exporter, REGISTRY)
             webmaster_exporter.start()

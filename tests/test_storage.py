@@ -202,7 +202,7 @@ def test_latest_daily_newest_date_per_query(storage: WebmasterStorage) -> None:
     storage.save_daily("w.com", [DailyRow("a1", "слон", "2026-08-17", 1.0, 10.0)], "t1")
     storage.save_daily("w.com", [DailyRow("a1", "слон", "2026-08-18", 2.0, 20.0)], "t2")
 
-    points = storage.latest_daily("2026-08-01")
+    points = storage.latest_daily("2026-08-01", "2026-08-31")
 
     assert len(points) == 1
     assert points[0].date == "2026-08-18"
@@ -213,13 +213,41 @@ def test_latest_daily_window_filters_stale_queries(storage: WebmasterStorage) ->
     storage.save_daily("w.com", [DailyRow("a1", "свежий", "2026-08-20", 1.0, 10.0)], "t1")
     storage.save_daily("w.com", [DailyRow("a2", "старый", "2026-07-01", 2.0, 20.0)], "t2")
 
-    points = storage.latest_daily("2026-08-15")
+    points = storage.latest_daily("2026-08-15", "2026-08-31")
 
     assert [point.query_id for point in points] == ["a1"]
 
 
 def test_latest_daily_empty(storage: WebmasterStorage) -> None:
-    assert storage.latest_daily("2026-08-01") == []
+    assert storage.latest_daily("2026-08-01", "2026-08-31") == []
+
+
+def test_latest_daily_until_bound_skips_unready_day(storage: WebmasterStorage) -> None:
+    """Горизонт готовности (инцидент 2026-08-25 «вечный ноль»): самый свежий
+    день ещё не финализирован Яндексом (нули) — рендерится последний день
+    ДО until_date, а не MAX(date)."""
+    storage.save_daily("w.com", [DailyRow("a1", "слон", "2026-08-22", 2.0, 20.0)], "t1")
+    storage.save_daily("w.com", [DailyRow("a1", "слон", "2026-08-23", 3.0, 30.0)], "t2")
+    storage.save_daily("w.com", [DailyRow("a1", "слон", "2026-08-24", 0.0, 0.0)], "t3")
+
+    points = storage.latest_daily("2026-08-01", "2026-08-23")
+
+    assert len(points) == 1
+    assert points[0].date == "2026-08-23"
+    assert points[0].shows == 30.0
+
+
+def test_latest_daily_query_with_only_unready_days_excluded(
+    storage: WebmasterStorage,
+) -> None:
+    """Запрос, у которого в окне есть ТОЛЬКО незашедшие в горизонт дни, не
+    отдаётся вовсе (честное «нет данных», не нули)."""
+    storage.save_daily("w.com", [DailyRow("a1", "новичок", "2026-08-24", 0.0, 0.0)], "t1")
+    storage.save_daily("w.com", [DailyRow("a2", "старожил", "2026-08-22", 5.0, 50.0)], "t2")
+
+    points = storage.latest_daily("2026-08-01", "2026-08-23")
+
+    assert [point.query_id for point in points] == ["a2"]
 
 
 def test_daily_history_end_bound(storage: WebmasterStorage) -> None:
