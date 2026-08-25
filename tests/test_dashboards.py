@@ -145,12 +145,18 @@ def test_per_site_dashboards_filter_by_site_label() -> None:
 
 
 def test_site_zabor_analytics_structure() -> None:
-    """Перенос user-analytics-fences «в таком же виде»: 9 панелей, метрики сайта."""
+    """Персайтный дашборд zabor: 9 панелей; статистика — абсолютные счётчики.
+
+    increase() обнуляется после подключения (наработка счётчиков ДО старта
+    скрейпа Prometheus невидима — ЧТЗ_Дашборд_User_Analytics_zabor_Абсолютные_Значения),
+    поэтому increase в expr дашборда запрещён; rate() на live-панелях разрешён.
+    """
     dashboard = load_dashboard("site-zabor-analytics.json")
     assert dashboard["uid"] == "site-zabor-analytics"
     assert len(dashboard["panels"]) == 9
     by_type = {panel["type"] for panel in dashboard["panels"]}
     assert "piechart" in by_type
+    assert "barchart" in by_type
     exprs = "\n".join(panel_exprs(dashboard))
     for metric in (
         "analytics_events_total",
@@ -159,6 +165,10 @@ def test_site_zabor_analytics_structure() -> None:
         "conversion_funnel_total",
     ):
         assert metric in exprs, metric
+    assert "increase(" not in exprs, (
+        "site-zabor-analytics: increase() обнуляется после подключения — "
+        "использовать абсолютные значения счётчиков"
+    )
 
 
 def test_site_overview_structure() -> None:

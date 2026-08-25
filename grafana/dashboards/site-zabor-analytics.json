@@ -468,12 +468,12 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (event_name) (increase(analytics_events_total{site=\"zabor-i-naves.ru\"}[1h]))",
+          "expr": "sum by (event_name) (analytics_events_total{site=\"zabor-i-naves.ru\"})",
           "legendFormat": "{{event_name}}",
           "refId": "A"
         }
       ],
-      "title": "Распределение событий за последний час",
+      "title": "Распределение событий (всего)",
       "type": "piechart"
     },
     {
@@ -485,28 +485,6 @@
         "defaults": {
           "color": {
             "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisLabel": "Пользователи",
-            "drawStyle": "line",
-            "fillOpacity": 20,
-            "gradientMode": "none",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
           },
           "mappings": [
             {
@@ -561,17 +539,22 @@
       },
       "id": 5,
       "options": {
+        "barRadius": 0,
+        "barWidth": 0.8,
+        "groupWidth": 0.7,
         "legend": {
-          "calcs": [
-            "sum"
-          ],
-          "displayMode": "table",
-          "placement": "right"
+          "displayMode": "list",
+          "placement": "bottom"
         },
+        "orientation": "horizontal",
+        "showValue": "always",
+        "stacking": "none",
         "tooltip": {
           "mode": "single",
           "sort": "none"
-        }
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
       },
       "targets": [
         {
@@ -579,13 +562,13 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (step) (increase(conversion_funnel_total{site=\"zabor-i-naves.ru\"}[1h]))",
+          "expr": "sum by (step) (conversion_funnel_total{site=\"zabor-i-naves.ru\"})",
           "legendFormat": "{{step}}",
           "refId": "A"
         }
       ],
-      "title": "Воронка конверсии",
-      "type": "timeseries"
+      "title": "Воронка конверсии (всего)",
+      "type": "barchart"
     },
     {
       "datasource": {
@@ -638,12 +621,12 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(increase(analytics_events_total{site=\"zabor-i-naves.ru\",event_name=\"page_view\"}[24h]))",
+          "expr": "sum(page_views_total{site=\"zabor-i-naves.ru\"})",
           "legendFormat": "Просмотры",
           "refId": "A"
         }
       ],
-      "title": "Просмотры за 24ч",
+      "title": "Просмотры страниц (всего)",
       "type": "stat"
     },
     {
@@ -697,12 +680,12 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(increase(analytics_events_total{site=\"zabor-i-naves.ru\",event_name=\"calculator_calculate\"}[24h]))",
+          "expr": "sum(calculator_events_total{site=\"zabor-i-naves.ru\"})",
           "legendFormat": "Расчёты",
           "refId": "A"
         }
       ],
-      "title": "Расчёты в калькуляторе за 24ч",
+      "title": "Расчёты в калькуляторе (всего)",
       "type": "stat"
     },
     {
@@ -756,12 +739,12 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(increase(analytics_events_total{site=\"zabor-i-naves.ru\",event_name=\"contact_form_submit\"}[24h]))",
+          "expr": "sum(conversion_funnel_total{site=\"zabor-i-naves.ru\",step=\"contact_form_submit\"})",
           "legendFormat": "Заявки",
           "refId": "A"
         }
       ],
-      "title": "Заявки за 24ч",
+      "title": "Заявки (всего)",
       "type": "stat"
     },
     {
@@ -815,7 +798,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(increase(conversion_funnel_total{site=\"zabor-i-naves.ru\",step=\"contact_form_submit\"}[24h])) / sum(increase(conversion_funnel_total{site=\"zabor-i-naves.ru\",step=\"page_view\"}[24h]))",
+          "expr": "sum(conversion_funnel_total{site=\"zabor-i-naves.ru\",step=\"contact_form_submit\"}) / sum(conversion_funnel_total{site=\"zabor-i-naves.ru\",step=\"page_view\"})",
           "legendFormat": "Конверсия",
           "refId": "A"
         }
@@ -843,6 +826,6 @@
   "timezone": "browser",
   "title": "User Analytics — zabor-i-naves.ru",
   "uid": "site-zabor-analytics",
-  "description": "Персайтный дашборд бизнес-метрик (перенос user-analytics-fences). Источник: job site-content (relay /metrics/content, ADR-010). Панели без данных до включения эндпоинта на сайте — норма.",
+  "description": "Персайтный дашборд бизнес-метрик (перенос user-analytics-fences). Источник: job site-content (relay /metrics/content, ADR-010). Живые панели (в минуту) наполняются с трафиком; панели «всего» — абсолютные счётчики приложения сайта (видны сразу после подключения, обнуляются при рестарте приложения сайта).",
   "refresh": "30s"
 }
