@@ -188,6 +188,12 @@ monitoring/
 - Бизнес-метрики сайта (`business_*`) — gauge, считаются на стороне сайта
   из БД (окна 24ч/1ч), пересчёт раз в 60 с; алерт SiteNoTraffic —
   только `== 0` и `offset`-сравнения, без rate()
+- Событийные метрики сайта (ADR-012): клик по телефону отдаётся сайтом
+  семплом `business_phone_clicks_event 1 <ts_ms>` с ЯВНЫМ timestamp'ом
+  (окно рендера 24ч) — осознанное исключение из ADR-011 D3; для приёма
+  повторных выдач в `storage.tsdb` включён `out_of_order_time_window: 25h`
+  (точные дубликаты ts+value молча дедуплицируются); плюс gauge-окно
+  `business_phone_clicks_12h` для стат-панели
 
 ### Алерты (ЭПИК-7, ADR-006)
 - Правила — `prometheus/alerts.yml` (rules-as-code): SiteDown (3m, critical),

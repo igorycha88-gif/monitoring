@@ -237,10 +237,10 @@ def test_all_sites_structure() -> None:
 
 
 def test_site_business_structure() -> None:
-    """ЭПИК-9 (ADR-007 D7): дашборд «Бизнес сайта» — 14 панелей."""
+    """ЭПИК-9 (ADR-007 D7) + ADR-012: дашборд «Бизнес сайта» — 16 панелей."""
     dashboard = load_dashboard("site-business.json")
     assert dashboard["uid"] == "site-business"
-    assert len(dashboard["panels"]) == 14
+    assert len(dashboard["panels"]) == 16
     titles = {panel["title"] for panel in dashboard["panels"]}
     assert titles == {
         "Активные сессии (30 мин)",
@@ -257,11 +257,51 @@ def test_site_business_structure() -> None:
         "Гео посетителей (топ-10, 24ч)",
         "Задержка эндпоинтов метрик",
         "Длительность сессии (24ч)",
+        "Клики по телефону (12ч)",
+        "Клики по телефону (время клика)",
     }
     var = dashboard["templating"]["list"][0]
     assert var["name"] == "site"
     assert var["multi"] is False
     assert var["includeAll"] is False
+
+
+def test_site_business_phone_click_panels() -> None:
+    """ADR-012 + ЧТЗ_Фикс_Клики_по_телефону: панели кликов по телефону.
+
+    Сайты гетерогенны: эвакуация.online отдаёт business_phone_clicks_12h /
+    business_phone_clicks_event, zabor-i-naves.ru — счётчик
+    analytics_events_total{event_name="phone_click"}. Основная ветка
+    приоритетна (`or`), fallback считает клики increase()-ом по счётчику.
+    Обе ветки с дедуплицирующей агрегацией и фильтром по переменной site.
+    """
+    dashboard = load_dashboard("site-business.json")
+    by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+    stat = by_title["Клики по телефону (12ч)"]
+    assert stat["type"] == "stat"
+    assert stat["targets"][0]["expr"] == (
+        'max by (site) (business_phone_clicks_12h{site="$site"})\n'
+        "or\n"
+        'sum by (site) (increase(analytics_events_total'
+        '{event_name="phone_click", site="$site"}[12h]))'
+    )
+    graph = by_title["Клики по телефону (время клика)"]
+    assert graph["type"] == "timeseries"
+    assert graph["targets"][0]["expr"] == (
+        'max by (site) (business_phone_clicks_event{site="$site"})\n'
+        "or\n"
+        "sum by (site) (increase(analytics_events_total"
+        '{event_name="phone_click", site="$site"}[$__rate_interval]))'
+    )
+    # Fallback на случай пропуска основной ветки при копировании expr
+    for expr in (stat["targets"][0]["expr"], graph["targets"][0]["expr"]):
+        assert "analytics_events_total" in expr, (
+            "site-business: панель телефона без fallback на счётчик сайта"
+        )
+    # Бары в момент клика: drawStyle=bars с полной заливкой
+    custom = graph["fieldConfig"]["defaults"]["custom"]
+    assert custom["drawStyle"] == "bars"
+    assert custom["fillOpacity"] == 100
 
 
 def test_site_business_panels_use_business_and_site_metrics() -> None:
@@ -283,6 +323,8 @@ def test_site_business_panels_use_business_and_site_metrics() -> None:
         "business_referral_sources_24h",
         "business_geo_visitors_24h",
         "business_service_clicks_24h",
+        "business_phone_clicks_12h",
+        "business_phone_clicks_event",
     ):
         assert metric in joined, metric
     assert "monitoring_site_metrics_up" in joined

@@ -60,6 +60,19 @@ def test_prometheus_config_no_real_key() -> None:
     assert "SITE_METRICS_API_KEY" not in entrypoint
 
 
+def test_prometheus_out_of_order_window_for_event_metrics() -> None:
+    """ADR-012: событийные метрики сайта с ЯВНЫМИ timestamp'ами требуют OOO-окна.
+
+    Сайт повторно выдаёт каждый клик (business_phone_clicks_event, окно
+    рендера 24ч) на каждом скрейпе — это дубликаты; out_of_order_time_window
+    ≥ 25h (окно рендера + запас) позволяет Prometheus молча дедуплицировать
+    (ts+value совпадают) и принимать новые события внутри окна.
+    Поле принадлежит секции storage.tsdb (BUG-001: в global — невалидно).
+    """
+    config = load_config()
+    assert config["storage"]["tsdb"]["out_of_order_time_window"] == "25h"
+
+
 def test_prometheus_retention_supports_year_slices() -> None:
     """ADR-008: годовые срезы [$period=365d] требуют долгого хранения данных.
 
